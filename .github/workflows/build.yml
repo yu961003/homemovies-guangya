@@ -12,6 +12,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 【手机专用】解压你上传的代码压缩包（必须叫 code.zip）
+      - name: Unzip source code
+        run: unzip -o code.zip
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
