@@ -54,9 +54,8 @@ jobs:
       - name: Accept SDK licenses
         run: yes | sdkmanager --licenses || true
 
-      # 【修复】新增 ndk;27.0.12077973：media3-exoplayer-ffmpeg 带入预编译原生库，
-      #          assembleDebug 打包时需 NDK 的 strip 工具对 .so 去符号，否则 stripDebugDebugSymbols 会失败。
-      #          版本需与 app/build.gradle.kts 中的 ndkVersion 一致。
+      # nextlib 带入预编译 FFmpeg .so，assembleDebug 打包时需 NDK 的 strip 工具对 .so 去符号，
+      # 否则 stripDebugDebugSymbols 会失败。版本需与 app/build.gradle.kts 中的 ndkVersion 一致。
       - name: Install required SDK packages
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973"
 
