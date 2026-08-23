@@ -21,7 +21,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --- 自动解压唯一的 ZIP 文件（放最前面） ---
+      # --- 自动解压唯一的 ZIP（智能查找 gradlew 所在目录） ---
       - name: Unzip source code
         run: |
           echo "📂 当前根目录内容："
@@ -40,16 +40,30 @@ jobs:
 
           unzip -o "$ZIP_FILE"
 
-          BASE_NAME=$(basename "$ZIP_FILE" .zip)
-          if [ ! -f "gradlew" ] && [ -d "$BASE_NAME" ]; then
-            echo "📁 检测到外层父文件夹 $BASE_NAME，正在迁移内容到根目录..."
-            mv "$BASE_NAME"/* . 2>/dev/null || true
-            mv "$BASE_NAME"/.[!.]* . 2>/dev/null || true
-            rmdir "$BASE_NAME" 2>/dev/null || true
+          if [ ! -f "gradlew" ]; then
+            echo "🔍 根目录下未找到 gradlew，正在查找包含 gradlew 的子目录..."
+            FOUND_DIR=""
+            for dir in */; do
+              if [ -f "$dir/gradlew" ]; then
+                FOUND_DIR="$dir"
+                echo "✅ 找到包含 gradlew 的目录：$FOUND_DIR"
+                break
+              fi
+            done
+            if [ -n "$FOUND_DIR" ]; then
+              echo "📁 正在迁移 $FOUND_DIR 内容到根目录..."
+              mv "$FOUND_DIR"* . 2>/dev/null || true
+              mv "$FOUND_DIR".[!.]* . 2>/dev/null || true
+              rmdir "$FOUND_DIR" 2>/dev/null || true
+              echo "✅ 内容迁移完成"
+            else
+              echo "❌ 错误：未找到包含 gradlew 的子目录"
+              exit 1
+            fi
           fi
 
           if [ ! -f "gradlew" ]; then
-            echo "❌ 错误：解压后未找到 gradlew 文件"
+            echo "❌ 错误：解压后未找到 gradlew 文件，请检查 ZIP 结构"
             exit 1
           fi
 
@@ -65,11 +79,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # --- 新增：用官方 Gradle 行动替代单独的 wrapper-validation，自带缓存 ---
+      # --- Gradle 缓存与 wrapper 校验（一步到位） ---
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          # 启用构建缓存（默认就是 true，可省略）
+          # 仅在 main/master 分支写入缓存，其他分支只读（可选，但推荐）
           cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
 
       - name: Grant execute permission for gradlew
