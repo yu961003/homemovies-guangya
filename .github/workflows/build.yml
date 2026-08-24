@@ -23,6 +23,7 @@ jobs:
 
       # --- 自动解压唯一的 ZIP（智能查找 gradlew 所在目录） ---
       - name: Unzip source code
+        id: unzip
         run: |
           echo "📂 当前根目录内容："
           ls -la
@@ -32,42 +33,30 @@ jobs:
             echo "❌ 错误：未找到任何 .zip 文件"
             exit 1
           fi
+
           ZIP_COUNT=$(ls *.zip 2>/dev/null | wc -l)
           if [ "$ZIP_COUNT" -gt 1 ]; then
-            echo "⚠️ 警告：找到多个 .zip 文件，将只处理第一个：$ZIP_FILE"
-          fi
-          echo "📦 找到 ZIP 文件：$ZIP_FILE"
-
-          unzip -o "$ZIP_FILE"
-
-          if [ ! -f "gradlew" ]; then
-            echo "🔍 根目录下未找到 gradlew，正在查找包含 gradlew 的子目录..."
-            FOUND_DIR=""
-            for dir in */; do
-              if [ -f "$dir/gradlew" ]; then
-                FOUND_DIR="$dir"
-                echo "✅ 找到包含 gradlew 的目录：$FOUND_DIR"
-                break
-              fi
-            done
-            if [ -n "$FOUND_DIR" ]; then
-              echo "📁 正在迁移 $FOUND_DIR 内容到根目录..."
-              mv "$FOUND_DIR"* . 2>/dev/null || true
-              mv "$FOUND_DIR".[!.]* . 2>/dev/null || true
-              rmdir "$FOUND_DIR" 2>/dev/null || true
-              echo "✅ 内容迁移完成"
-            else
-              echo "❌ 错误：未找到包含 gradlew 的子目录"
-              exit 1
-            fi
+            echo "⚠️ 警告：检测到多个 .zip 文件，将使用第一个：$ZIP_FILE"
           fi
 
-          if [ ! -f "gradlew" ]; then
-            echo "❌ 错误：解压后未找到 gradlew 文件，请检查 ZIP 结构"
+          echo "📦 解压 $ZIP_FILE ..."
+          TMP_DIR=$(mktemp -d)
+          unzip -q "$ZIP_FILE" -d "$TMP_DIR"
+
+          # 智能查找 gradlew 所在目录（兼容 ZIP 内含一层根目录的情况）
+          GRADLEW_DIR=$(find "$TMP_DIR" -type f -name gradlew | head -n 1 | xargs -r dirname)
+          if [ -z "$GRADLEW_DIR" ]; then
+            echo "❌ 错误：解压后未找到 gradlew，请确认 ZIP 内含 Android 工程"
             exit 1
           fi
 
-          echo "✅ 解压并整理完成，当前根目录内容："
+          echo "📍 工程根目录：$GRADLEW_DIR"
+          # 将工程内容移动到仓库根目录，使后续步骤可直接使用 ./gradlew
+          shopt -s dotglob
+          mv "$GRADLEW_DIR"/* "$GITHUB_WORKSPACE"/
+          shopt -u dotglob
+
+          echo "✅ 解压完成"
           ls -la
 
       - name: Set up JDK 17
@@ -79,15 +68,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # --- Gradle 缓存与 wrapper 校验（一步到位） ---
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          # 仅在 main/master 分支写入缓存，其他分支只读（可选，但推荐）
-          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
-
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v3
 
       - name: Build debug APK (skip lint)
         run: ./gradlew :app:assembleDebug --console=plain
