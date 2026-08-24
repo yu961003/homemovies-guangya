@@ -51,9 +51,22 @@ jobs:
           fi
 
           echo "📍 工程根目录：$GRADLEW_DIR"
-          # 将工程内容移动到仓库根目录，使后续步骤可直接使用 ./gradlew
+          # 将工程内容落地到仓库根目录，使后续步骤可直接使用 ./gradlew
+          # checkout 已在 $GITHUB_WORKSPACE 落下 .github（含本工作流自身），与
+          # ZIP 内的 .github 同名且非空，直接 mv 会报 "Directory not empty" 而失败。
+          # 因此逐条处理：同名目录用 cp -a 递归并入，其余（含 .git 防护）直接 mv。
           shopt -s dotglob
-          mv "$GRADLEW_DIR"/* "$GITHUB_WORKSPACE"/
+          for entry in "$GRADLEW_DIR"/*; do
+            name=$(basename "$entry")
+            if [ "$name" = ".git" ]; then
+              continue   # 绝不覆盖 checkout 生成的 .git
+            fi
+            if [ -d "$entry" ] && [ -d "$GITHUB_WORKSPACE/$name" ]; then
+              cp -a "$entry"/. "$GITHUB_WORKSPACE/$name"/
+            else
+              mv "$entry" "$GITHUB_WORKSPACE"/
+            fi
+          done
           shopt -u dotglob
 
           echo "✅ 解压完成"
