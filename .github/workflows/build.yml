@@ -84,8 +84,9 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      # ★ 修复点：v3 已弃用且拉取 /versions/all 超时，升级到维护中的 v4
       - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@v3
+        uses: gradle/actions/wrapper-validation@v4
 
       - name: Build debug APK (skip lint)
         run: ./gradlew :app:assembleDebug --console=plain
