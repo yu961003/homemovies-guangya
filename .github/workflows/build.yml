@@ -72,15 +72,23 @@ jobs:
           echo "✅ 解压完成"
           ls -la
 
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # v3 的 action.yml 默认 packages = 'tools platform-tools'，而 legacy "tools" 包
+      # 自 cmdline-tools 16.0 起已从 SDK 仓库移除：sdkmanager 打印
+      # `Failed to find package 'tools'` 并 exit 1，job 在编译前就死。
+      # 必须显式覆盖 packages；注意 action 内部按 split(' ') 切分，只能用单行空格分隔
+      # （或用 >- 折叠），写成 | 字面块会把换行带进包名，同样失败。
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
