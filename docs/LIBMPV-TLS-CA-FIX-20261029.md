@@ -120,14 +120,35 @@ MpvOptions.build 调用点全仓 3 处（engine 1 + androidTest 2），全部已
 JNI 返回类型三处一致（property.cpp / stub.cpp / MPVLib.kt）：setPropertyString、setPropertyDouble
 ```
 
-### 5.2 GitHub Actions
+### 5.2 GitHub Actions（2026-10-30 已实跑，绿）
 
-1. 解压交付包 → 推到仓库（`app/**` 或 `release/**` 触发，或 Actions → build-apk → Run workflow）。
-2. 因包内自带 `jniLibs/arm64-v8a`，workflow 会命中「检测 jniLibs 是否已自带库」分支，
-   **跳过** 40–90 分钟的 `build-libmpv`，直接 `:app:assembleDebug -PmpvAbis=arm64-v8a`。
-3. 两个硬断言必须绿：
-   - `断言 APK 内含 libmpv`：arm64-v8a 的 `.so` ≥ 9 且含 `libmpv.so`
-   - `断言 APK 内含 CA 包`：APK 内存在 `assets/mpv/cacert.pem`
+仓库形态已从「只放交付 zip」改为「工程本体入库」，因此 workflow 不再解压任何压缩包，
+`push` 直接触发编译：
+
+```
+checkout → 源码树自检 → JDK 17 → NDK 27.0.12077973 + CMake 3.22.1
+        → 原生库闭包自检 → assembleDebug -PmpvAbis=arm64-v8a
+        → 断言 APK 内含 libmpv + 8 个兄弟库 → 断言 APK 内含 CA 包
+        → testDebugUnitTest --tests '*MpvHttpProxyTest*' → 上传 artifact
+```
+
+实跑回执（`yu961003/homemovies-guangya`，commit `0de90e8`）：
+
+| run | 分支 | 结果 |
+|---|---|---|
+| 40915197351 | `source-upload` | success（11/11 步） |
+| 40916373729 | `main` | success（11/11 步） |
+
+产物体检（`apk-debug-0de90e86…`，52 MB）：
+
+- `lib/arm64-v8a/` 内 10 个 `.so`：`libmpv` + `libavcodec/libavformat/libavutil/libavfilter/
+  libavdevice/libswresample/libswscale/libc++_shared` + `libplayer`（JNI 桥）
+- `assets/mpv/cacert.pem` 297 255 B / 150 张证书
+- dex 内可检索到 `MpvHttpProxy`、`MpvCaBundle`、`describeNetworkPath`
+  → 本次两轮修复确实进了包，不是「改了源码但没打进 APK」
+
+> 历史：旧 workflow 第一步是「解压仓库里唯一的 zip」，仓库改存源码后该步必然 `exit 1`，
+> 于是失败信息停在解压而不是编译。run 40906145433 就是这么红的。
 
 ### 5.3 真机（本次**未验证**，需在设备上补）
 
@@ -159,4 +180,5 @@ I MpvPlaybackEngine: mpv 引擎就绪，hwdec=mediacodec，CA=/data/user/0/<pkg>
 4. mpv 0.41 默认 `tls-verify` 的版本级确认 —— 依据是 mpv 文档与 `libmpv.so` 内含
    `tls-verify`/`tls-ca-file` 字面量，包内无版本说明书可证；即便默认是 `no`，
    显式 `tls-verify=yes` + `tls-ca-file` 也是**更安全**的配置，不构成回归风险。
-5. CI 实跑回执 —— 需推到真实 GitHub 仓库后由 Actions 给出绿/红，本地无 Android SDK/JDK。
+5. ~~CI 实跑回执~~ —— **已闭环**：run 40915197351（`source-upload`）与 40916373729（`main`）
+   均 success，产物内含 libmpv、CA 包与代理类，见 §5.2。

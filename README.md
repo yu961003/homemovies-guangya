@@ -2,7 +2,17 @@
 
 本目录是 **HomeMovie（LocalMovieLibrary）** 的整合副本，已接入**光鸭云盘**支持，同时**完整保留 115 网盘的登录 + STRM 生成 + 播放**。
 
-> ⚠️ 本工程由 AI 在沙箱中产出，**未经过真机/本地编译验证**（沙箱无 Android SDK 且无外网到 Google Maven / Gradle）。请在 Android Studio 或 GitHub Actions 中执行一次 `./gradlew assembleDebug` 验证。
+> ✅ **可直接编译，CI 已跑绿**：仓库现在放的是**工程本体**（源码树 + `gradlew` + 预编译 `jniLibs`），
+> 不再放交付 zip。任何 push 都会触发 `.github/workflows/build.yml`：
+> `assembleDebug -PmpvAbis=arm64-v8a` → 断言 APK 内含 `libmpv.so` 与 8 个兄弟库 → 断言
+> `assets/mpv/cacert.pem` 入包 → 跑 `MpvHttpProxyTest` → 上传 artifact。
+>
+> 本机也可以直接 `./gradlew :app:assembleDebug -PmpvAbis=arm64-v8a`（需 JDK 17 + NDK 27.0.12077973）。
+>
+> 📱 **装到手机上要有 APK**：Actions → `Android CI` → 对应 run → Artifacts → `apk-debug-<sha>`。
+> ⚠️ 真机播放**尚未实证**（CI 无 Android 设备）：`loading_failed(-13, reason=4)` 的两条修复
+> （回环代理 + CA 包）是否解决你那条 https 直链，需要用本包在设备上复验，见
+> `docs/LIBMPV-TLS-CA-FIX-20261029.md` §5.3 的 logcat 判读表。
 
 > 📦 **包名变更**：`com.example.localmovielibrary` → **`com.example.localmovielibrarz`**（全部 Kotlin package/import、namespace、applicationId、目录结构均已同步，含 test 目录）。
 

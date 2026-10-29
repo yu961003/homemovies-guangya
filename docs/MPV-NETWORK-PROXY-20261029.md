@@ -150,6 +150,12 @@ mpv 日志：[lavf] HTTP error 403 Forbidden | [lavf] Failed to open …
 
 ## 5. 未验证项（不得当作已验证结论）
 
+> **CI 已验证的部分**（run 40915197351 / 40916373729，均 success）：Kotlin 编译、APK 打包、
+> `assets/mpv/cacert.pem` 入包、`libmpv.so` + 8 兄弟库入包，以及 `MpvHttpProxyTest`
+> （回环代理的字节透明性：Range 透传、chunked、502 透传原因）。**没有**验证的是下面这些
+> 真机行为——CI 里没有 Android 设备，也没有用户的真实直链。
+
+
 1. **代理是否能真正解决用户的这条链接**：本地无 JDK/Android SDK，也拿不到用户的真实直链
    （用户已脱敏为 `XXXXX.mp4`），因此**未在真机复现验证**。
    验证方法：装本轮 APK → 播放失败时看 logcat
