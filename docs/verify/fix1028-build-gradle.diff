@@ -1,0 +1,147 @@
+--- a/app/build.gradle.kts	2026-10-28 23:37:08.000000000 +0800
++++ b/app/build.gradle.kts	2026-10-29 00:34:41.037461900 +0800
+@@ -27,11 +27,37 @@
+         versionCode = 21
+         versionName = "3.2"
+ 
++        // mpv 原生链路由 app/src/androidTest/.../MpvPlaybackSmokeTest.kt 做运行期验证
++        // （打包层 / 加载层 / 解码层 / 渲染层四级）。测试 APK 只在 ./gradlew
++        // connectedAndroidTest 时构建，不进 release 产物。
++        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
++
++        // ── ABI 白名单（2026-10-28 libmpv 修复）──────────────────────────────
++        //
++        // 之前这里没有 abiFilters，AGP 默认给 4 个 ABI（arm64-v8a / armeabi-v7a /
++        // x86 / x86_64）各跑一遍 CMake；而 jniLibs 里一个 .so 都没有，于是 4 个
++        // ABI 全部编出 stub 版 libplayer.so（MPV_AVAILABLE=0）。APK 能装能跑，
++        // 但 mpv 引擎恒判定不可用 —— 用户看到的就是
++        // 「未检测到 libmpv.so：原生库缺失」。
++        //
++        // 现在 jniLibs 已按 ABI 装上预编译 libmpv.so 及其兄弟库（装配脚本：
++        // scripts/assemble-libmpv-jnilibs.py）。显式钉住这三个 ABI，是为了让
++        // 「jniLibs 里有哪几个 ABI」和「APK 里编哪几个 ABI」变成同一件事：
++        //   - x86 不再进包：预编译 libmpv 不提供 x86，32 位 x86 设备上 mpv
++        //     本来就不可用（仍可回退 ExoPlayer），白编一份 stub 没有意义；
++        //   - 每多一个 ABI，就多一种「有 libplayer.so 却没有 libmpv.so」的
++        //     半装组合，白名单把这种组合的可能数量压到零。
++        //
++        // 文件末尾的 verifyMpvNativeLibs 用同一份白名单反向校验 jniLibs，
++        // 两边一旦不一致，构建直接失败，而不是运行期静默降级。
++        ndk {
++            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
++        }
++
+         // CMakeLists 只编 JNI 封装层；libmpv.so 本身是外部预编译产物，
+-        // 由 scripts/fetch-libmpv.sh（或 CI artifact）放进 jniLibs/<abi>/。
+-        // 找不到 libmpv.so 时 CMake 退化为 stub 版 libplayer.so，
+-        // 运行期 MpvPlaybackEngine 判定不可用并回退 ExoPlayer——所以这里不需要
+-        // 条件开关，两种情况都必须能 assemble 成功。
++        // 由 scripts/assemble-libmpv-jnilibs.py（或 CI artifact）放进 jniLibs/<abi>/。
++        // 缺库时 CMake 退化为 stub 版 libplayer.so，assemble 本身不会失败——
++        // 真正的门禁是 verifyMpvNativeLibs。
+         externalNativeBuild {
+             cmake {
+                 // 用静态 STL：封装层是纯 JNI C 风格代码（CMakeLists 里已 -fno-exceptions
+@@ -174,5 +200,102 @@
+ 
+     testImplementation("junit:junit:4.13.2")
+ 
++    // instrumentation 测试只用最薄的一层：AndroidJUnit4 runner + InstrumentationRegistry。
++    // 不引 espresso/compose-test，避免为「能不能播」这一个问题拖进整套 UI 测试依赖。
++    androidTestImplementation("androidx.test.ext:junit:1.2.1")
++    androidTestImplementation("androidx.test:runner:1.6.2")
++
+     debugImplementation("androidx.compose.ui:ui-tooling")
+ }
++
++// ─────────────────────────────────────────────────────────────────────────────
++// verifyMpvNativeLibs —— 「libmpv 真的在包里」的构建期门禁
++//
++// 这个任务存在的唯一理由：缺 libmpv.so 时 CMakeLists 会安静地编一个 stub
++// 版 libplayer.so，整个构建**成功**，只有等用户点开视频才看到「未检测到
++// libmpv.so：原生库缺失」。那种失败模式已经发生过一次，不能再靠人眼看日志。
++//
++// 检查项（任一不满足即构建失败）：
++//   1) abiFilters 白名单里每个 ABI 的 jniLibs 目录都有 libmpv.so
++//   2) libmpv 在运行时 dlopen 时会连带加载的兄弟库也在（缺一个就整串失败，
++//      dlerror 仍然只会说 "libmpv.so not found"，最容易误判）
++//   3) 目录里没有 libplayer.so —— 那是 CMake 的产物，手工放进去会和产物同名
++//
++// 有意不放进 CMake：CMake 拿不到 abiFilters 的最终值（AGP 在 configure 之后
++// 才决定），而这里能直接读到 android.defaultConfig.ndk.abiFilters。
++// ─────────────────────────────────────────────────────────────────────────────
++val mpvRequiredSiblings = listOf(
++    "libavcodec.so",
++    "libavfilter.so",
++    "libavformat.so",
++    "libavutil.so",
++    "libswresample.so",
++    "libswscale.so",
++    "libavdevice.so",
++    "libc++_shared.so",
++)
++
++/** 每个 release ABI 必须成套出现的 .so（libmpv + 它在 Android 上的运行时依赖）。 */
++val mpvRequiredPerAbi = listOf("libmpv.so") + mpvRequiredSiblings
++
++val verifyMpvNativeLibs by tasks.registering {
++    group = "verification"
++    description = "校验 jniLibs/<abi>/ 里的 libmpv.so 及其兄弟库是否成套（缺失即失败）"
++
++    val jniLibsDir = layout.projectDirectory.dir("src/main/jniLibs")
++    val abis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
++    inputs.files(fileTree(jniLibsDir) { include("**/*.so") })
++    inputs.property("abis", abis)
++
++    doLast {
++        val problems = mutableListOf<String>()
++        for (abi in abis) {
++            val dir = jniLibsDir.dir(abi).asFile
++            if (!dir.isDirectory) {
++                problems += "$abi: 目录不存在（$dir）"
++                continue
++            }
++            val present = dir.listFiles { f -> f.isFile }?.map { it.name }?.toSet() ?: emptySet()
++            for (name in mpvRequiredPerAbi) {
++                if (name !in present) {
++                    problems += "$abi: 缺 $name"
++                }
++            }
++            if ("libplayer.so" in present) {
++                problems += "$abi: 出现了 libplayer.so —— 它必须由 CMake 产出，" +
++                    "放进 jniLibs 会和构建产物重名"
++            }
++            if (present.any { it.endsWith(".so") } && "libmpv.so" !in present) {
++                problems += "$abi: 有兄弟库但没有 libmpv.so（装到一半）"
++            }
++        }
++        if (problems.isNotEmpty()) {
++            throw GradleException(
++                buildString {
++                    appendLine("libmpv 原生库不完整 —— APK 会退化成 stub 版 libplayer.so，")
++                    appendLine("运行期报「未检测到 libmpv.so：原生库缺失」。")
++                    appendLine()
++                    problems.forEach { appendLine("  - $it") }
++                    appendLine()
++                    appendLine("修复：python scripts/assemble-libmpv-jnilibs.py \\")
++                    appendLine("        --source <预编译 libmpv 的 AAR 解包目录>/jni \\")
++                    appendLine("        --write-manifest app/src/main/jniLibs/.sha256.json")
++                    appendLine("（或 bash scripts/fetch-libmpv.sh --verify 查看现有产物）")
++                },
++            )
++        }
++        logger.lifecycle(
++            "[mpv] jniLibs 校验通过：" +
++                abis.joinToString { abi ->
++                    "$abi=${jniLibsDir.dir(abi).asFile.listFiles { f -> f.name.endsWith(".so") }?.size ?: 0}"
++                } +
++                " 个 .so",
++        )
++    }
++}
++
++// 挂在 preBuild 上：任何 assemble* / bundle* 都会先过这道门。
++// 只在有 jniLibs 校验意图时触发一次，不额外增加增量构建成本。
++tasks.matching { it.name == "preBuild" }.configureEach {
++    dependsOn(verifyMpvNativeLibs)
++}

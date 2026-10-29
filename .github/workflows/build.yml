@@ -1,5 +1,26 @@
 name: Android CI
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 源码直编（2026-10-30 改造）
+#
+# 历史：这个 workflow 的第一步曾是「解压仓库里唯一的 zip」，因为仓库过去只放
+# 交付包，不放工程本体。那段逻辑在仓库改存源码树之后就变成必然失败——
+# 找不到 *.zip 直接 exit 1，而它排在编译之前，于是每次都是「解压失败」而不是
+# 「代码编不过」。2026-10-29 的 40906145433 就是这么红的。
+#
+# 现在仓库里就是工程本体：
+#   gradlew + app/ + scripts/ + jniLibs/arm64-v8a/*.so（9 个预编译原生库）
+# 于是流程退回最朴素的一条：checkout → 装 NDK → assembleDebug → 硬断言 → 出包。
+#
+# 三条断言都不能省，它们各自对应一种「构建成功但 APK 废」的静默降级：
+#   1) libmpv.so 必须在 APK 里 —— 否则 CMake 编的是 stub 版，运行时判定
+#      「未检测到 libmpv.so」并回退 ExoPlayer，mpv 整条路径根本没跑过；
+#   2) 兄弟库必须齐 —— libmpv 的 DT_NEEDED 里少一个，dlopen 整串失败，
+#      而 dlerror 只会说 libmpv.so not found，最容易误判；
+#   3) cacert.pem 必须在 APK 里 —— https 直链靠静态链接的 mbedtls，
+#      它不读 Android 系统 CA，只能读这个随包分发的 PEM。缺了就是 -13。
+# ─────────────────────────────────────────────────────────────────────────────
+
 on:
   push:
     branches: [ "**" ]
@@ -11,6 +32,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # 只发 arm64-v8a：jniLibs 里只有这一套预编译 libmpv 及其兄弟库，
+  # armeabi-v7a / x86_64 目录仅留 .gitkeep 占位。abiFilters 必须与 jniLibs
+  # 实际目录一致，否则 verifyMpvNativeLibs 会拦下（它按 abiFilters 反向查目录）。
+  MPV_ABIS: arm64-v8a
+  NDK_VERSION: 27.0.12077973
+  CMAKE_VERSION: 3.22.1
+
 jobs:
   build:
     name: AssembleDebug
@@ -21,89 +50,136 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --- 自动解压唯一的 ZIP（智能查找 gradlew 所在目录） ---
-      - name: Unzip source code
-        id: unzip
+      # 仓库形态自检：把「源码树是否提交全」这件事在编译之前说清楚，
+      # 免得报出来的错是 Gradle 的 "Task 'assembleDebug' not found"。
+      - name: 源码树自检
+        shell: bash
         run: |
-          echo "📂 当前根目录内容："
+          set -euo pipefail
+          echo "📂 仓库根内容："
           ls -la
+          test -f gradlew || { echo "::error::缺少 gradlew —— 源码树没提交全"; exit 1; }
+          test -f gradle/wrapper/gradle-wrapper.properties || { echo "::error::缺少 gradle wrapper"; exit 1; }
+          test -f app/build.gradle.kts || { echo "::error::缺少 app/build.gradle.kts"; exit 1; }
+          test -f settings.gradle.kts || { echo "::error::缺少 settings.gradle.kts"; exit 1; }
+          echo "--- jniLibs/$MPV_ABIS ---"
+          ls -l "app/src/main/jniLibs/$MPV_ABIS"/*.so
+          echo "--- CA 包 ---"
+          stat -c '%s B  %n' app/src/main/assets/mpv/cacert.pem
 
-          ZIP_FILE=$(ls *.zip 2>/dev/null | head -n 1)
-          if [ -z "$ZIP_FILE" ]; then
-            echo "❌ 错误：未找到任何 .zip 文件"
-            exit 1
-          fi
-
-          ZIP_COUNT=$(ls *.zip 2>/dev/null | wc -l)
-          if [ "$ZIP_COUNT" -gt 1 ]; then
-            echo "⚠️ 警告：检测到多个 .zip 文件，将使用第一个：$ZIP_FILE"
-          fi
-
-          echo "📦 解压 $ZIP_FILE ..."
-          TMP_DIR=$(mktemp -d)
-          unzip -q "$ZIP_FILE" -d "$TMP_DIR"
-
-          # 智能查找 gradlew 所在目录（兼容 ZIP 内含一层根目录的情况）
-          GRADLEW_DIR=$(find "$TMP_DIR" -type f -name gradlew | head -n 1 | xargs -r dirname)
-          if [ -z "$GRADLEW_DIR" ]; then
-            echo "❌ 错误：解压后未找到 gradlew，请确认 ZIP 内含 Android 工程"
-            exit 1
-          fi
-
-          echo "📍 工程根目录：$GRADLEW_DIR"
-          # 将工程内容落地到仓库根目录，使后续步骤可直接使用 ./gradlew
-          # checkout 已在 $GITHUB_WORKSPACE 落下 .github（含本工作流自身），与
-          # ZIP 内的 .github 同名且非空，直接 mv 会报 "Directory not empty" 而失败。
-          # 因此逐条处理：同名目录用 cp -a 递归并入，其余（含 .git 防护）直接 mv。
-          shopt -s dotglob
-          for entry in "$GRADLEW_DIR"/*; do
-            name=$(basename "$entry")
-            if [ "$name" = ".git" ]; then
-              continue   # 绝不覆盖 checkout 生成的 .git
-            fi
-            if [ -d "$entry" ] && [ -d "$GITHUB_WORKSPACE/$name" ]; then
-              cp -a "$entry"/. "$GITHUB_WORKSPACE/$name"/
-            else
-              mv "$entry" "$GITHUB_WORKSPACE"/
-            fi
-          done
-          shopt -u dotglob
-
-          echo "✅ 解压完成"
-          ls -la
-
-      - name: Set up JDK 17
+      - name: 安装 JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # v3 的 action.yml 默认 packages = 'tools platform-tools'，而 legacy "tools" 包
-      # 自 cmdline-tools 16.0 起已从 SDK 仓库移除：sdkmanager 打印
-      # `Failed to find package 'tools'` 并 exit 1，job 在编译前就死。
-      # 必须显式覆盖 packages；注意 action 内部按 split(' ') 切分，只能用单行空格分隔
-      # （或用 >- 折叠），写成 | 字面块会把换行带进包名，同样失败。
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-          accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: false
+      # runner 自带 SDK 里通常没有工程 pin 的 NDK 27，AGP 会尝试自动下载，
+      # 失败时只给一句含糊的 "NDK not configured"。显式装一次，报错更早更清楚。
+      - name: 安装 NDK / CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          # runner 镜像里 cmdline-tools 的位置随镜像版本变过，别假定 latest 一定在
+          SDKM=$(command -v sdkmanager || true)
+          if [ -z "$SDKM" ]; then
+            for c in "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+                     "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager \
+                     "$ANDROID_HOME/tools/bin/sdkmanager"; do
+              if [ -x "$c" ]; then SDKM="$c"; break; fi
+            done
+          fi
+          if [ -z "$SDKM" ]; then
+            echo "::error::找不到 sdkmanager（ANDROID_HOME=$ANDROID_HOME）"
+            ls -R "$ANDROID_HOME" | head -40
+            exit 1
+          fi
+          echo "sdkmanager: $SDKM"
+          # `yes |` 在 pipefail 下会被 SIGPIPE 带成失败（yes 写满管道后被杀），
+          # 用有限次输入代替。
+          printf 'y\n%.0s' $(seq 1 40) | "$SDKM" --licenses > /dev/null 2>&1 || true
+          "$SDKM" "ndk;$NDK_VERSION" "cmake;$CMAKE_VERSION" > /dev/null
+          test -d "$ANDROID_HOME/ndk/$NDK_VERSION" || {
+            echo "::error::NDK 装完仍不存在：$ANDROID_HOME/ndk/$NDK_VERSION"; exit 1; }
+          echo "NDK: $ANDROID_HOME/ndk/$NDK_VERSION"
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: 原生库闭包自检
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 与 Gradle 的 verifyMpvNativeLibs 同源，但更早失败、报错更聚焦：
+          # 它同时读 DT_NEEDED，能指出「缺哪个 .so」而不是只说「目录不全」。
+          python3 scripts/assemble-libmpv-jnilibs.py --verify-only --abis "$MPV_ABIS"
 
-      # ★ 修复点：v3 已弃用且拉取 /versions/all 超时，升级到维护中的 v4
-      - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@v4
+      - name: 构建 debug APK（跳过 lint）
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:assembleDebug -PmpvAbis="$MPV_ABIS" -x lint
 
-      - name: Build debug APK (skip lint)
-        run: ./gradlew :app:assembleDebug --console=plain
+      # 「构建成功」不等于「APK 能加载 mpv」：stub 降级也会成功。
+      # 这里直接拆开 APK 数 .so，把这件事变成硬失败。
+      - name: 断言 APK 内含 libmpv 与整套兄弟库
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          test -f "$apk"
+          echo "APK: $(stat -c %s "$apk") B"
+          rc=0
+          for abi in ${MPV_ABIS//,/ }; do
+            n=$(unzip -l "$apk" | awk -v a="lib/$abi/" '$4 ~ (a ".*\\.so$") {c++} END {print c+0}')
+            mpv=$(unzip -l "$apk" | grep -c "lib/$abi/libmpv.so$" || true)
+            echo "  $abi: $n 个 .so, libmpv.so=$mpv"
+            [ "$n" -ge 9 ] || { echo "::error::$abi 的 .so 不足 9 个"; rc=1; }
+            [ "$mpv" -ge 1 ] || { echo "::error::$abi 没有 libmpv.so —— 又退化成 stub 了"; rc=1; }
+            for sib in libavcodec.so libavfilter.so libavformat.so libavutil.so \
+                       libswresample.so libswscale.so libavdevice.so libc++_shared.so; do
+              unzip -l "$apk" | grep -q "lib/$abi/$sib$" || {
+                echo "::error::$abi 缺兄弟库 $sib —— dlopen libmpv.so 会整串失败"; rc=1; }
+            done
+          done
+          exit $rc
 
-      - name: Upload debug APK artifact
+      # https 直链能不能播，取决于 APK 里有没有那份 CA 包：
+      # libavformat 是静态 mbedtls 构建，不读 Android 系统 CA，只能靠 --tls-ca-file
+      # 指向随包分发的 PEM。把「CA 包被误删/未被打包」变成构建期失败，
+      # 而不是等用户在真机上看到 loading_failed（error=-13,reason=error/4）。
+      - name: 断言 APK 内含 CA 包（https 直链前提）
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          src=app/src/main/assets/mpv/cacert.pem
+          test -f "$src" || { echo "::error::缺少 $src —— https 直链必然 -13"; exit 1; }
+          bytes=$(stat -c %s "$src")
+          echo "源 CA 包: $bytes B"
+          [ "$bytes" -gt 65536 ] || { echo "::error::CA 包只有 $bytes B，明显被截断"; exit 1; }
+          # grep -c 在 0 命中时退出码是 1，pipefail 下会直接把脚本打死且不留日志
+          certs=$(grep -c "BEGIN CERTIFICATE" "$src" || true)
+          echo "证书数: $certs"
+          [ "${certs:-0}" -gt 0 ] || { echo "::error::CA 包里没有任何 BEGIN CERTIFICATE"; exit 1; }
+          inapk=$(unzip -l "$apk" | grep -c "assets/mpv/cacert.pem$" || true)
+          echo "APK 内 assets/mpv/cacert.pem: $inapk"
+          [ "$inapk" -ge 1 ] || { echo "::error::APK 里没有 assets/mpv/cacert.pem"; exit 1; }
+
+      # 回环代理是这次修 -13 的核心：mpv 的 ffmpeg 走 mbedtls，不认系统 CA、
+      # 不带 UA，和 exo 的 OkHttp 不是一回事。代理把「怎么发请求」整体换成 OkHttp。
+      # 但代理一旦把字节改错（长度不符、Content-Range 丢失、Range 没转发），
+      # 症状仍是同一个 -13 —— 比原来更难查。所以用一台本地假上游把逐字节等价
+      # 钉死。这些用例不联网、不需要设备，几秒跑完。
+      - name: 单元测试（回环代理字节透明性）
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:testDebugUnitTest \
+            --tests '*MpvHttpProxyTest*' -PmpvAbis="$MPV_ABIS"
+
+      - name: 上传 debug APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: apk-debug-${{ github.sha }}
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30

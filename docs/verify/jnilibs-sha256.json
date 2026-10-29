@@ -1,0 +1,110 @@
+{
+ "arm64-v8a/libavcodec.so": {
+  "sha256": "2048ef964b3f7de520b0515db645923d9548fcd656b3d7b0732bbe5822ccb3a3",
+  "size": 11979536
+ },
+ "arm64-v8a/libavdevice.so": {
+  "sha256": "20f8d19d422b43e0a91b1dbe8f7b46558277aaab08e2971cc2a19238d2fc9a3d",
+  "size": 9048
+ },
+ "arm64-v8a/libavfilter.so": {
+  "sha256": "1234199006dd10f73b92e7f7b10213530cf314dd3dd5bcdcf5f8527d4c27073a",
+  "size": 141456
+ },
+ "arm64-v8a/libavformat.so": {
+  "sha256": "4edf68d3a0008840e516992380466ff7ee2ec926a56aff07713fdea4025492a7",
+  "size": 2974464
+ },
+ "arm64-v8a/libavutil.so": {
+  "sha256": "26a08d67f466edd3917280de7938fe373503ae94f59a86e377ce61de3ebb249b",
+  "size": 726808
+ },
+ "arm64-v8a/libc++_shared.so": {
+  "sha256": "c4c2fe5cbcb1fba0003a31fc7ab29a9bb12df6cc187ec45a806462540e83d93b",
+  "size": 1374336
+ },
+ "arm64-v8a/libmpv.so": {
+  "sha256": "0184efeba540fcb8ebfaa759462204d940c7cf7f8a589774389e4005bfa0a951",
+  "size": 6477048
+ },
+ "arm64-v8a/libswresample.so": {
+  "sha256": "a18b0a5a556f74ba2fa61ee60cecccfcbd6b746f9cb0088b05534f3feb17678d",
+  "size": 96576
+ },
+ "arm64-v8a/libswscale.so": {
+  "sha256": "6707ce92803d331ce811cb65f752bb7441ba4396dbc71ecd284792fe7ec9ffe6",
+  "size": 1152584
+ },
+ "armeabi-v7a/libavcodec.so": {
+  "sha256": "a8a494da07d5b3783b17f653305b69142a1bb6cb976558d94dda6a562e5e4da1",
+  "size": 11456272
+ },
+ "armeabi-v7a/libavdevice.so": {
+  "sha256": "80320d3e8e5e0f8cd41e301da20c293c3c8af965d822a0f1c1d88447b657a48f",
+  "size": 6964
+ },
+ "armeabi-v7a/libavfilter.so": {
+  "sha256": "82902d10bdf553baf8806c52ef26517aecc50735260a394234cad4b609accad2",
+  "size": 122300
+ },
+ "armeabi-v7a/libavformat.so": {
+  "sha256": "ae4397e37ec09e7bebe3dd886a93546905953fff66fd3cedc877f7c38a4b8f6e",
+  "size": 2716652
+ },
+ "armeabi-v7a/libavutil.so": {
+  "sha256": "1bfca8f23def5dd959fd445fcd1a15b604ad1d712cbae87cbde044574f12581b",
+  "size": 643220
+ },
+ "armeabi-v7a/libc++_shared.so": {
+  "sha256": "af383654daf4cf0829615460419a180f84edd9d8bf51aa0f81ed0db811bf8491",
+  "size": 963028
+ },
+ "armeabi-v7a/libmpv.so": {
+  "sha256": "8ee65fe08bb8e4ccf7578e92a357be283d904e2821d9686f91fbf6cdda9d4957",
+  "size": 5827504
+ },
+ "armeabi-v7a/libswresample.so": {
+  "sha256": "5592abe03634cb307ac45c9a435b5bfa0731363780b076c836b2b5f1659311b3",
+  "size": 89916
+ },
+ "armeabi-v7a/libswscale.so": {
+  "sha256": "c7efd57d5341c59f71e83518dcb19c0468267a2a08d61409502e63abfa6d606b",
+  "size": 799408
+ },
+ "x86_64/libavcodec.so": {
+  "sha256": "86ac65fc8e2c1a56f8edf601b18da0d2dc516c2e2d9a3af05d8752e9e7401db6",
+  "size": 16142304
+ },
+ "x86_64/libavdevice.so": {
+  "sha256": "a6fba6adcfd5255c2005b789f85cc9aa42ba70655e15c46ca54058b4aad6df20",
+  "size": 9048
+ },
+ "x86_64/libavfilter.so": {
+  "sha256": "0fcc624390d06e49f5ad98be06e0b04dc4b03e8fbc21deb487612342253b69cc",
+  "size": 152272
+ },
+ "x86_64/libavformat.so": {
+  "sha256": "f2d3c8b65f3780068947ce0d4ab39a3c98d5f5cd3790597708cdb03e81a9a0ec",
+  "size": 3035232
+ },
+ "x86_64/libavutil.so": {
+  "sha256": "95a825e3c89a1de94a0204a7051e2da2e5c16992b621f52c83a351fe466ee633",
+  "size": 880320
+ },
+ "x86_64/libc++_shared.so": {
+  "sha256": "683a1c7cd2f6829fd40bf805739166c5fce35235bf60d2c4e4a95e9f65a342ef",
+  "size": 1337488
+ },
+ "x86_64/libmpv.so": {
+  "sha256": "93dafd16e9706b9675197735884853bc1c4f86ae30970623ac19bf6b1825422e",
+  "size": 6603680
+ },
+ "x86_64/libswresample.so": {
+  "sha256": "8b4bc16d17cfce6b5b7446bfee429c43785c700115d11bc43b026a73172b2cf0",
+  "size": 137808
+ },
+ "x86_64/libswscale.so": {
+  "sha256": "084aafcfcaa85c40744b0390048c9eb86153608ffdcf421b740fc8daccff2e28",
+  "size": 1555744
+ }
+}

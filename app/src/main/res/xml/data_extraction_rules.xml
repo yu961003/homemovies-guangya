@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 备份排除规则（Android 12+ / API 31+）：排除含敏感凭据的 SharedPreferences 与 115 cookie 文件目录 -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="secure_settings.xml" />
+        <exclude domain="sharedpref" path="cloud115.xml" />
+        <exclude domain="sharedpref" path="guangya_tokens.xml" />
+        <exclude domain="file" path="115cookies/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="secure_settings.xml" />
+        <exclude domain="sharedpref" path="cloud115.xml" />
+        <exclude domain="sharedpref" path="guangya_tokens.xml" />
+        <exclude domain="file" path="115cookies/" />
+    </device-transfer>
+</data-extraction-rules>

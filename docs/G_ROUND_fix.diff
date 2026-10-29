@@ -1,0 +1,573 @@
+# 光鸭批量重命名 G 轮修复 · 统一 Diff（第十三轮）
+# 生成于 2026-08-27 18:16, 基于 GY20260827_172108.zip 原始快照
+
+================================================================
+diff --git a/app/src/main/java/com/example/localmovielibrarz/cloudguangya/GuangyaBrowserRepository.kt b/app/src/main/java/com/example/localmovielibrarz/cloudguangya/GuangyaBrowserRepository.kt
+--- a/app/src/main/java/com/example/localmovielibrarz/cloudguangya/GuangyaBrowserRepository.kt
++++ b/app/src/main/java/com/example/localmovielibrarz/cloudguangya/GuangyaBrowserRepository.kt
+@@ -3,6 +3,7 @@
+ import com.example.localmovielibrarz.ui.guangya.dedupeNameAgainst
+ import com.example.localmovielibrarz.ui.guangya.renameNameKey
+ import com.example.localmovielibrarz.ui.guangya.validateGeneratedName
++import com.example.localmovielibrarz.ui.guangya.visualizeInvisibleChars
+ import android.util.Log
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.delay
+@@ -71,169 +72,198 @@
+     /**
+      * 需求 3：批量重命名文件/目录（扩展名由调用方保留）。
+      *
+-     * 第十二轮修复（F-1 读后校验 + 补偿重试）：
+-     * - code=0 只记「待确认」，用 listFiles 真实目录状态做最终裁决；未生效项自动补偿重试。
+-     * - 保留第十一轮 D-1（拓扑排序 + 环中转）、D-2（已存在即时重试）、
+-     *   第十轮 A-1（旧名腾出/失败加回）、A-3（autoSuffixed 计数）、C-2（- 开头拦截）。
+-     * - F-2：succeeded 只含校验确认生效项；retried 计数补偿重试生效项。
+-     * - F-3：校验-补偿过程 Log.i 留痕（tag GuangyaBatchRename）。
++     * 第十三轮 G-1 修复（两阶段临时名中转，取代 F-1 读后校验-补偿模型）：
++     * 统一模型——服务端写操作后存在秒级「传播窗口」黑盒；窗口内读/写都不可信。
++     * 一切历史失败都发生在依赖链上（目标名 = 前序项的旧名，窗口内该名占用状态不确定）。
++     * 破局点：把「有依赖的改名」分解成两次**无冲突面**的改名：
++     *   依赖项先改到互不冲突的临时名（零冲突面 → 受理即执行）→ 等传播窗口（3s，
++     *   此时读已可信）→ 临时名改目标名（目标名唯一占用者是自己的临时名，零冲突面）。
++     * 无依赖项直改（从未失败的安全路径，节奏 1200ms 不变，无 delay / 无临时名）。
++     *
++     * 配套 G-2：本地校验失败标注「本地校验：」前缀；
++     *        G-3①：safeRenameItem 发送前硬 trim（覆盖一切上游漏 trim 的实现偏差）；
++     *        G-4：整体移除 F-1 校验-补偿循环 / PendingConfirm / 终局「未生效」判死。
+      */
+     suspend fun batchRenameFiles(
+         renames: List<Pair<String, String>>,
+         parentId: String = ""
+     ): BatchRenameResult {
+         val failed = mutableListOf<BatchRenameFailure>()
++        val succeeded = mutableListOf<Pair<String, String>>()
+         var autoSuffixed = 0
++        var retried = 0   // G-1 模型下不再有补偿重试，恒为 0（保留字段兼容 ViewModel 消费）
+ 
+-        // ---- 第 0 步：目录快照 + D-1 拓扑排序 + 环中转（第十一轮，保持不变）----
++        // ---- 目录快照（非根目录才有 parentId，用于冲突判定与窗口后校验）----
+         val namesById = if (parentId.isNotBlank()) {
+             runCatching { apiClient.listFiles(parentId).associate { it.fileId to it.name } }
+                 .getOrDefault(emptyMap())
+         } else emptyMap()
+-        val pendingIds = renames.map { it.first }.toSet()
+-        val renamingOldNames = pendingIds.mapNotNull { namesById[it] }.toSet()
+-        val existingNames = (namesById.values - renamingOldNames).toMutableSet()
+-
+-        val (orderedRenames, ringMembers) = orderRenamesByDependency(renames, namesById)
+-
+-        // ① 环成员先改到互不冲突的临时名
+-        if (ringMembers.isNotEmpty()) {
+-            val occupiedKeys = mutableSetOf<String>().apply {
+-                addAll(existingNames.map { it.renameNameKey() })
+-                addAll(renames.mapNotNull { it.second.renameNameKey() })
+-            }
+-            ringMembers.forEach { (fileId, newName) ->
+-                val oldName = namesById[fileId] ?: return@forEach
+-                validateGeneratedName(newName)?.let { reason ->
+-                    failed.add(BatchRenameFailure(fileId, newName, reason))
+-                    existingNames.add(oldName)
+-                    return@forEach
+-                }
+-                val temp = uniqueTempName(oldName, occupiedKeys)
+-                runCatching { apiClient.renameItem(fileId, temp) }
+-                    .onSuccess {
+-                        occupiedKeys.add(temp.renameNameKey())
+-                        existingNames.add(temp)
+-                    }
+-                    .onFailure { error ->
+-                        existingNames.add(oldName)
+-                        failed.add(BatchRenameFailure(fileId, newName,
+-                            error.message ?: error::class.java.simpleName))
+-                    }
+-            }
+-        }
+ 
+-        // ---- 第 1 步：首轮执行——成功仅记「待确认」（★ F-1 不再直接进 succeeded）----
+-        val pending = mutableListOf<PendingRename>()
++        // ---- ★ G-1 依赖项判定：目标名命中「任何待改名文件的旧名」（规范化比对，排除自身）----
++        val (independent, dependent) = splitIndependentDependent(renames, namesById)
+ 
+-        val executeQueue = orderedRenames + ringMembers
+-        executeQueue.forEach { (fileId, newName) ->
++        // 共享冲突集：目录现有名（排除所有将被改走的旧名）+ 已占用的新名。
++        // dedupeNameAgainst 内部按 renameNameKey 比对，这里存原始名即可。
++        val renamingOldNames = renames.mapNotNull { namesById[it.first] }.toSet()
++        val conflictSet = (namesById.values - renamingOldNames).toMutableSet()
++
++        // ---- 第 1 段：无依赖项直改（从未失败的安全路径，无 delay / 无临时名）----
++        independent.forEach { (fileId, newName) ->
+             val oldName = namesById[fileId]
+-            if (failed.any { it.fileId == fileId && it.newName == newName }) return@forEach
+-            val skip: (String) -> Unit = { reason ->
+-                oldName?.let { existingNames.add(it) }
+-                failed.add(BatchRenameFailure(fileId, newName, reason))
++            runIndependentRename(fileId, newName, oldName, conflictSet, failed)?.let { finalName ->
++                if (finalName != newName) autoSuffixed++
++                succeeded.add(fileId to finalName)
+             }
+-            if (fileId.isBlank() || newName.isBlank()) { skip("名称为空"); return@forEach }
+-            validateGeneratedName(newName)?.let { skip(it); return@forEach }
+-            val finalName = dedupeNameAgainst(newName, existingNames)
+-            if (finalName != newName) autoSuffixed++
+-            runCatching { apiClient.renameItem(fileId, finalName) }
+-                .onSuccess {
+-                    existingNames.add(finalName)
+-                    pending.add(PendingRename(fileId, newName, finalName))
+-                }
+-                .onFailure { error ->
+-                    oldName?.let { existingNames.add(it) }
+-                    failed.add(BatchRenameFailure(fileId, newName,
+-                        error.message ?: error::class.java.simpleName))
+-                }
+-        }
+-
+-        // ---- 第 2 步：D-2 明确拒绝项的即时重试（保持，重试成功同样进 pending）----
+-        val retryables = failed.filter {
+-            it.reason.contains("已存在") || it.reason.contains("重名")
+-        }.also { failed.removeAll(it) }
+-        retryables.forEach { failure ->
+-            val finalName = dedupeNameAgainst(failure.newName, existingNames)
+-            if (finalName != failure.newName) autoSuffixed++
+-            runCatching { apiClient.renameItem(failure.fileId, finalName) }
+-                .onSuccess {
+-                    existingNames.add(finalName)
+-                    pending.add(PendingRename(failure.fileId, failure.newName, finalName))
+-                }
+-                .onFailure { failed.add(failure) }
+         }
+ 
+-        // ---- 第 3 步：★ F-1 校验-补偿循环（最多 3 轮）----
+-        if (parentId.isBlank() || pending.isEmpty()) {
+-            // 无 parentId 无法校验，或无待确认项——乐观信任受理结果
++        if (dependent.isEmpty()) {
+             return BatchRenameResult(
+-                succeeded = pending.map { it.fileId to it.finalName },
++                succeeded = succeeded,
+                 failed = failed,
+                 autoSuffixed = autoSuffixed,
+-                retried = 0
++                retried = retried
+             )
+         }
+ 
+-        val confirmed = mutableListOf<Pair<String, String>>()
+-        var unresolved = pending.toList()
+-        var retried = 0
+-        val maxVerifyRounds = 3
+-
+-        var round = 0
+-        while (unresolved.isNotEmpty() && round < maxVerifyRounds) {
+-            round++
+-            delay(if (round == 1) 800L else 1_500L)
+-
+-            val currentNames = runCatching {
+-                apiClient.listFiles(parentId).associate { it.fileId to it.name }
+-            }.getOrNull() ?: break // 校验读失败：乐观信任，不补偿
+-
+-            val (effected, notEffected) = partitionRenameResults(unresolved, currentNames)
+-            confirmed += effected.map { it.fileId to it.finalName }
+-
+-            if (notEffected.isEmpty()) break
+-
+-            // ★ F-3：校验过程日志留痕
+-            Log.i("GuangyaBatchRename",
+-                "第 $round 轮校验：${notEffected.size} 项受理成功但未生效" +
+-                    "（fileId=${notEffected.map { it.fileId }}），进入补偿重试")
+-
+-            // 补偿重试：用最新目录状态重建冲突集（腾名语义保持）
+-            val unresolvedCurrentNames = notEffected.mapNotNull { currentNames[it.fileId] }.toSet()
+-            val latestExisting = (currentNames.values - unresolvedCurrentNames).toMutableSet()
+-            val next = mutableListOf<PendingRename>()
+-            notEffected.forEach { p ->
+-                val retryFinal = dedupeNameAgainst(p.finalName, latestExisting)
+-                runCatching { apiClient.renameItem(p.fileId, retryFinal) }
+-                    .onSuccess {
+-                        latestExisting.add(retryFinal)
+-                        retried++
+-                        next.add(p.copy(finalName = retryFinal))
+-                    }
+-                    .onFailure { error ->
+-                        failed.add(BatchRenameFailure(p.fileId, p.newName,
+-                            "重试被拒：${error.message ?: error::class.java.simpleName}"))
+-                    }
++        // ---- 第 2 段：依赖项阶段一 → 全部改到临时名（★ 零冲突面）----
++        // 临时名三不撞：不撞目录现有名（namesById.values）、不撞全部目标名、彼此不同；
++        // 且必须过 validateGeneratedName（对齐参考实现 batchRename.ts:403——临时名同样校验）。
++        val occupied = (namesById.values + renames.map { it.second })
++            .mapTo(mutableSetOf()) { it.renameNameKey() }
++
++        data class Stage1(val fileId: String, val tempName: String, val targetName: String)
++
++        val atTemp = mutableSetOf<String>()   // 已成功改到临时名的 fileId
++        val stage1 = mutableListOf<Stage1>()
++
++        dependent.forEach { (fileId, targetName) ->
++            val oldName = namesById[fileId]
++            if (oldName == null) {
++                failed.add(BatchRenameFailure(fileId, targetName, "本地校验：找不到原文件名"))
++                return@forEach
++            }
++            val temp = uniqueTempName(oldName, occupied) ?: run {
++                failed.add(BatchRenameFailure(fileId, targetName, "临时名生成失败（冲突过多）"))
++                return@forEach
++            }
++            // 临时名同样校验（对齐参考实现）
++            validateGeneratedName(temp)?.let { reason ->
++                failed.add(BatchRenameFailure(fileId, targetName, "本地校验（临时名）：$reason"))
++                return@forEach
++            }
++            // 零冲突面：受理即执行
++            if (safeRenameItem(fileId, temp)) {
++                occupied.add(temp.renameNameKey())
++                atTemp.add(fileId)
++                stage1.add(Stage1(fileId, temp, targetName))
++            } else {
++                conflictSet.add(oldName)   // 仍占旧名，回填冲突集
++                failed.add(BatchRenameFailure(fileId, targetName, "中转至临时名失败（服务端拒绝）"))
+             }
+-            unresolved = next
+         }
+ 
+-        // 循环结束仍未确认的：受理成功但服务端始终未执行
+-        unresolved.forEach { p ->
+-            failed.add(BatchRenameFailure(p.fileId, p.newName,
+-                "服务端返回成功但未生效（已校验重试 $round 轮），请稍后手动重试"))
++        // ---- 第 3 段：等传播窗口，校验临时名（此时读已可信——窗口后索引稳定）----
++        delay(3_000)
++        val current = runCatching { apiClient.listFiles(parentId).associate { it.fileId to it.name } }
++            .getOrNull()
++        if (current != null) {
++            // 阶段一虚假成功 → 重发（临时名零冲突面，重试必成）
++            stage1.filter { s -> current[s.fileId]?.renameNameKey() != s.tempName.renameNameKey() }
++                .forEach { s ->
++                    if (safeRenameItem(s.fileId, s.tempName)) {
++                        atTemp.add(s.fileId)
++                    } else {
++                        atTemp.remove(s.fileId)
++                        failed.add(BatchRenameFailure(s.fileId, s.targetName,
++                            "中转至临时名失败（重试后仍被服务端拒绝）"))
++                    }
++                }
++        }
++        // listFiles 失败：乐观信任阶段一受理结果，直接进第 4 段
++
++        // ---- 第 4 段：阶段二 → 临时名改目标名（★ 零冲突面：所有旧名已实际腾出，
++        //      目标名的唯一占用者是自己的临时名（同 fileId），服务端无冲突可判）----
++        stage1.forEach { s ->
++            if (s.fileId !in atTemp) return@forEach   // 阶段一/重试未成功，跳过
++            val finalTarget = dedupeNameAgainst(s.targetName, conflictSet)
++            if (finalTarget != s.targetName) autoSuffixed++
++            if (safeRenameItem(s.fileId, finalTarget)) {
++                succeeded.add(s.fileId to finalTarget)
++                conflictSet.add(finalTarget)
++            } else {
++                // ★ 临时名残留防御：文件停留在临时名，不回滚、不静默丢弃；计入 failed 并提示手动改名
++                conflictSet.add(s.tempName)
++                failed.add(BatchRenameFailure(s.fileId, s.targetName,
++                    "已中转至临时名「${visualizeInvisibleChars(s.tempName)}」，请手动改名"))
++            }
+         }
+ 
+         return BatchRenameResult(
+-            succeeded = confirmed,
++            succeeded = succeeded,
+             failed = failed,
+             autoSuffixed = autoSuffixed,
+             retried = retried
+         )
+     }
+ 
++    /**
++     * G-1 依赖项拆分：目标名命中「任何其他待改名文件的旧名」即判为依赖项（窗口内该名的
++     * 占用状态不确定，必须走临时名中转）；命中自身旧名（等价无改名）按无依赖直改处理。
++     */
++    internal fun splitIndependentDependent(
++        renames: List<Pair<String, String>>,
++        namesById: Map<String, String>
++    ): Pair<List<Pair<String, String>>, List<Pair<String, String>>> {
++        val allOldKeys = renames.mapNotNull { (id, _) -> namesById[id]?.renameNameKey() }.toSet()
++        return renames.partition { (id, newName) ->
++            val selfKey = namesById[id]?.renameNameKey()
++            val others = allOldKeys - (selfKey ?: "")
++            newName.renameNameKey() !in others
++        }
++    }
++
++    /**
++     * G-3①：重命名统一入口（Repository 层最后防线）。
++     * 发送前硬 trim 首尾空格（覆盖一切上游漏 trim 的实现偏差），并打点告警日志，
++     * 杜绝不可见空格以外泄到服务端（服务端文案为「文件名不能…」，与本地「名称不能…」一字之差）。
++     * 返回是否受理成功（runCatching 兜底网络/业务异常，不向上抛）。
++     */
++    private suspend fun safeRenameItem(fileId: String, name: String): Boolean {
++        val safeName = name.trim()
++        if (safeName != name) {
++            Log.w("GuangyaBatchRename", "发送前清除不可见首尾空格：'$name' → '$safeName'")
++        }
++        return runCatching { apiClient.renameItem(fileId, safeName) }.isSuccess
++    }
++
++    /** 无依赖项单次改名（直改安全路径）。返回最终名；校验/受理失败则记 failed 并返回 null。 */
++    private suspend fun runIndependentRename(
++        fileId: String,
++        newName: String,
++        oldName: String?,
++        conflictSet: MutableSet<String>,
++        failed: MutableList<BatchRenameFailure>
++    ): String? {
++        if (fileId.isBlank() || newName.isBlank()) {
++            failed.add(BatchRenameFailure(fileId, newName, "本地校验：名称为空"))
++            return null
++        }
++        validateGeneratedName(newName)?.let { reason ->
++            failed.add(BatchRenameFailure(fileId, newName, "本地校验：$reason"))
++            return null
++        }
++        val finalName = dedupeNameAgainst(newName, conflictSet)
++        // ★ 零冲突面：受理即执行。统一经 safeRenameItem（G-3① 发送前硬 trim）
++        return if (safeRenameItem(fileId, finalName)) {
++            conflictSet.add(finalName)
++            finalName
++        } else {
++            oldName?.let { conflictSet.add(it) }   // 失败则仍占旧名，回填冲突集
++            failed.add(BatchRenameFailure(fileId, newName, "重命名请求被服务端拒绝"))
++            null
++        }
++    }
++
+     /** 解析离线下载链接（磁力链/.torrent/ed2k）。 */
+     suspend fun resolveOfflineUrl(url: String) = apiClient.resolveOfflineUrl(url)
+ 
+@@ -241,7 +271,7 @@
+     suspend fun createOfflineTask(url: String, parentId: String) = apiClient.createOfflineTask(url, parentId)
+ }
+ 
+-/** 单条批量重命名失败信息（服务端拒绝原因透传，如「文件名不能以空格开头或结尾」）。 */
++/** 单条批量重命名失败信息（reason 透传；本地校验失败带「本地校验：」前缀，服务端拒绝保持原文）。 */
+ data class BatchRenameFailure(
+     val fileId: String,
+     val newName: String,
+@@ -250,32 +280,16 @@
+ 
+ /** 批量重命名整体结果：逐条容错，一条被拒不中断队列其余请求。 */
+ data class BatchRenameResult(
+-    val succeeded: List<Pair<String, String>>, // (fileId, 校验确认生效的最终名)
++    val succeeded: List<Pair<String, String>>, // (fileId, 最终生效名)
+     val failed: List<BatchRenameFailure>,
+     val autoSuffixed: Int = 0, // ★ A-3：因撞名被自动加后缀的项数
+-    val retried: Int = 0 // ★ F-2：经补偿重试才生效的项数
++    val retried: Int = 0       // ★ F-2 遗留字段：G-1 模型下恒为 0（补偿重试已移除，保留以兼容 UI 消费）
+ )
+ 
+ /**
+- * F-1：校验分流——将待确认项按服务端真实目录状态分为「已生效」与「未生效」。
+- * 比对用 renameNameKey（大小写/NFC 差异不算未生效）；fileId 消失归入未生效。
+- */
+-internal data class PendingRename(val fileId: String, val newName: String, val finalName: String)
+-
+-internal fun partitionRenameResults(
+-    pending: List<PendingRename>,
+-    currentNames: Map<String, String>
+-): Pair<List<PendingRename>, List<PendingRename>> {
+-    val (effected, notEffected) = pending.partition { p ->
+-        currentNames[p.fileId]?.let { it.renameNameKey() == p.finalName.renameNameKey() } == true
+-    }
+-    return effected to notEffected
+-}
+-
+-/**
+- * D-1：依赖拓扑排序（Kahn 贪心）。
++ * D-1：依赖拓扑排序（Kahn 贪心）——保留为纯工具函数（互换名/环检测仍有价值，且回归测试覆盖）。
+  * 每轮挑出「目标名不占用任何待执行项旧名」的项；剩余无法挑出的即环形依赖（A↔B 互换名）。
+- * 返回 (有序执行列表, 环成员)。
++ * 返回 (有序执行列表, 环成员)。G-1 的实际依赖判定已移至 splitIndependentDependent。
+  */
+ internal fun orderRenamesByDependency(
+     renames: List<Pair<String, String>>,
+@@ -293,15 +307,16 @@
+     return ordered to emptyList()
+ }
+ 
+-/** D-1 临时名生成：原名 stem + "-tmp-n"，确保不撞 occupiedKeys（n 递增，上限防御）。 */
+-private fun uniqueTempName(oldName: String, occupiedKeys: MutableSet<String>): String {
++/** D-1 / G-1 临时名生成：原名 stem + "tmp-ren-n-" 前缀，确保不撞 occupiedKeys（n 递增，上限防御），且过本地校验。 */
++internal fun uniqueTempName(oldName: String, occupiedKeys: MutableSet<String>): String? {
+     val ext = oldName.substringAfterLast('.', "")
+     val stem = if (ext.isNotEmpty()) oldName.substringBeforeLast('.') else oldName
+     var n = 1
+     while (n <= 1000) {
+-        val next = if (ext.isNotEmpty()) "${stem}-tmp-$n.$ext" else "$stem-tmp-$n"
+-        if (next.renameNameKey() !in occupiedKeys) return next
++        val next = if (ext.isNotEmpty()) "tmp-ren-$n-$stem.$ext" else "tmp-ren-$n-$stem"
++        if (next.renameNameKey() !in occupiedKeys && validateGeneratedName(next) == null) return next
++        occupiedKeys.add(next.renameNameKey())  // 生成失败候选也占位，避免下个依赖项重复
+         n++
+     }
+-    return "${stem}-tmp-$n$ext"
++    return null
+ }
+================================================================
+diff --git a/app/src/main/java/com/example/localmovielibrarz/ui/guangya/RenameOps.kt b/app/src/main/java/com/example/localmovielibrarz/ui/guangya/RenameOps.kt
+--- a/app/src/main/java/com/example/localmovielibrarz/ui/guangya/RenameOps.kt
++++ b/app/src/main/java/com/example/localmovielibrarz/ui/guangya/RenameOps.kt
+@@ -422,6 +422,12 @@
+ fun String.renameNameKey(): String =
+     java.text.Normalizer.normalize(trim(), java.text.Normalizer.Form.NFC).lowercase(Locale.ROOT)
+ 
++/**
++ * G-3②：不可见空格显形——把名字里的空格渲染为可见符号 ␠，用于失败项可视化诊断。
++ * B 类失败（展示名看似无空格，首尾空格在 UI 上不可见）经此即可一眼定位。
++ */
++fun visualizeInvisibleChars(name: String): String = name.replace(' ', '␠')
++
+ /** 重名 auto-suffix：与目录内既有文件撞名时补 " (n)"，返回最终不冲突名（防御上限 1000，极端兜底加用户可辨后缀）。 */
+ fun dedupeNameAgainst(candidate: String, existingNames: Set<String>): String {
+     val existingKeys = existingNames.mapTo(HashSet()) { it.renameNameKey() }
+================================================================
+diff --git a/app/src/main/java/com/example/localmovielibrarz/ui/guangya/GuangyaBrowserViewModel.kt b/app/src/main/java/com/example/localmovielibrarz/ui/guangya/GuangyaBrowserViewModel.kt
+--- a/app/src/main/java/com/example/localmovielibrarz/ui/guangya/GuangyaBrowserViewModel.kt
++++ b/app/src/main/java/com/example/localmovielibrarz/ui/guangya/GuangyaBrowserViewModel.kt
+@@ -736,7 +736,8 @@
+                                 }
+                                 if (outcome.failed.isNotEmpty()) {
+                                     append("，失败 ${outcome.failed.size} 项：")
+-                                    append(outcome.failed.joinToString("；") { "${it.newName}（${it.reason}）" })
++                                    // ★ G-3②：不可见空格显形（␠），便于一眼定位 B 类失败
++                                    append(outcome.failed.joinToString("；") { "${visualizeInvisibleChars(it.newName)}（${it.reason}）" })
+                                 }
+                             },
+                             managing = false,
+@@ -809,7 +810,8 @@
+                                 }
+                                 if (outcome.failed.isNotEmpty()) {
+                                     append("，失败 ${outcome.failed.size} 项：")
+-                                    append(outcome.failed.joinToString("；") { "${it.newName}（${it.reason}）" })
++                                    // ★ G-3②：不可见空格显形（␠），便于一眼定位 B 类失败
++                                    append(outcome.failed.joinToString("；") { "${visualizeInvisibleChars(it.newName)}（${it.reason}）" })
+                                 }
+                             },
+                             managing = false,
+================================================================
+diff --git a/app/src/test/java/com/example/localmovielibrarz/ui/guangya/RenameOpsTest.kt b/app/src/test/java/com/example/localmovielibrarz/ui/guangya/RenameOpsTest.kt
+--- a/app/src/test/java/com/example/localmovielibrarz/ui/guangya/RenameOpsTest.kt
++++ b/app/src/test/java/com/example/localmovielibrarz/ui/guangya/RenameOpsTest.kt
+@@ -2,8 +2,8 @@
+ 
+ import com.example.localmovielibrarz.cloudguangya.GuangyaFileItem
+ import com.example.localmovielibrarz.cloudguangya.orderRenamesByDependency
+-import com.example.localmovielibrarz.cloudguangya.partitionRenameResults
+-import com.example.localmovielibrarz.cloudguangya.PendingRename
++import com.example.localmovielibrarz.cloudguangya.splitIndependentDependent
++import com.example.localmovielibrarz.cloudguangya.uniqueTempName
+ import org.junit.Assert.assertEquals
+ import org.junit.Assert.assertNotNull
+ import org.junit.Assert.assertNull
+@@ -343,43 +343,71 @@
+         assertEquals(2, ring.size)
+     }
+ 
+-    // ---- 第十二轮 F-1：校验分流 partitionRenameResults ----
++    // ---- 第十三轮 G-1：依赖项拆分 splitIndependentDependent ----
+ 
+-    @Test fun `校验_大小写差异不算未生效`() {
+-        // currentNames = fileId → "ABC.MP4"，finalName = "abc.mp4" → renameNameKey 相同 → 已生效
+-        val pending = listOf(PendingRename("f1", "abc.mp4", "abc.mp4"))
+-        val currentNames = mapOf("f1" to "ABC.MP4")
+-        val (effected, notEffected) = partitionRenameResults(pending, currentNames)
+-        assertEquals(1, effected.size)
+-        assertEquals(0, notEffected.size)
+-    }
+-
+-    @Test fun `校验_fileId消失归入未生效`() {
+-        val pending = listOf(PendingRename("f1", "new.mp4", "new.mp4"))
+-        val (effected, notEffected) = partitionRenameResults(pending, emptyMap())
+-        assertEquals(0, effected.size)
+-        assertEquals(1, notEffected.size)
+-    }
+-
+-    @Test fun `校验_名字未改归入未生效`() {
+-        // 文件仍叫旧名 → 服务端受理但未执行
+-        val pending = listOf(PendingRename("f1", "new.mp4", "new.mp4"))
+-        val currentNames = mapOf("f1" to "old.mp4")
+-        val (effected, notEffected) = partitionRenameResults(pending, currentNames)
+-        assertEquals(0, effected.size)
+-        assertEquals(1, notEffected.size)
+-    }
+-
+-    @Test fun `校验_混合列表正确分流`() {
+-        val pending = listOf(
+-            PendingRename("f1", "a.mp4", "a.mp4"),  // 已生效
+-            PendingRename("f2", "b.mp4", "b.mp4"),  // 未生效（仍叫旧名）
+-            PendingRename("f3", "c.mp4", "c.mp4")   // fileId 消失
+-        )
+-        val currentNames = mapOf("f1" to "a.mp4", "f2" to "old.mp4")
+-        val (effected, notEffected) = partitionRenameResults(pending, currentNames)
+-        assertEquals(1, effected.size)
+-        assertEquals(2, notEffected.size)
++    @Test fun `依赖拆分_目标名撞其他项旧名判为依赖`() {
++        // B 目标名 = A 旧名，B 在前 → B 依赖（走临时名中转），A 独立（直改）
++        val namesById = mapOf("idA" to "X.mp4", "idB" to "Y.mp4")
++        val renames = listOf("idB" to "X.mp4", "idA" to "Z.mp4")
++        val (independent, dependent) = splitIndependentDependent(renames, namesById)
++        assertEquals(setOf("idA" to "Z.mp4"), independent.toSet())
++        assertEquals(setOf("idB" to "X.mp4"), dependent.toSet())
++    }
++
++    @Test fun `依赖拆分_互换名双方均为依赖`() {
++        // A→B旧名, B→A旧名：双方目标名都命中对方旧名 → 均走临时名两阶段
++        val namesById = mapOf("idA" to "X.mp4", "idB" to "Y.mp4")
++        val renames = listOf("idA" to "Y.mp4", "idB" to "X.mp4")
++        val (independent, dependent) = splitIndependentDependent(renames, namesById)
++        assertTrue(independent.isEmpty())
++        assertEquals(2, dependent.size)
++    }
++
++    @Test fun `依赖拆分_目标名等于自身旧名按独立直改`() {
++        // 等价无改名（newName == oldName）不触发中转，避免无意义 churn
++        val namesById = mapOf("idA" to "X.mp4")
++        val (independent, dependent) = splitIndependentDependent(listOf("idA" to "X.mp4"), namesById)
++        assertEquals(listOf("idA" to "X.mp4"), independent)
++        assertTrue(dependent.isEmpty())
++    }
++
++    @Test fun `依赖拆分_无冲突目标全部独立`() {
++        val namesById = mapOf("idA" to "X.mp4", "idB" to "Y.mp4")
++        val (independent, dependent) = splitIndependentDependent(
++            listOf("idA" to "P.mp4", "idB" to "Q.mp4"), namesById
++        )
++        assertEquals(2, independent.size)
++        assertTrue(dependent.isEmpty())
++    }
++
++    // ---- 第十三轮 G-1：临时名生成 uniqueTempName（零冲突面） ----
++
++    @Test fun `临时名_不撞现有名且保留扩展名`() {
++        val occupied = mutableSetOf("x.mp4".renameNameKey())
++        val temp = uniqueTempName("A.mp4", occupied)
++        assertNotNull(temp)
++        assertTrue(temp!!.endsWith(".mp4"))
++        assertTrue(temp.renameNameKey() !in occupied)
++    }
++
++    @Test fun `临时名_撞名自动递增`() {
++        val occupied = mutableSetOf<String>()
++        // 预占 tmp-ren-1-A.mp4，应跳过并生成 tmp-ren-2-A.mp4
++        occupied.add("tmp-ren-1-A.mp4".renameNameKey())
++        val temp = uniqueTempName("A.mp4", occupied)
++        assertEquals("tmp-ren-2-A.mp4", temp)
++    }
++
++    @Test fun `临时名_无扩展名形态`() {
++        val temp = uniqueTempName("README", mutableSetOf())
++        assertEquals("tmp-ren-1-README", temp)
++    }
++
++    // ---- 第十三轮 G-3②：不可见空格显形 ----
++
++    @Test fun `可视化_首尾空格显形`() {
++        assertEquals("ABC-XXX␠.restored", visualizeInvisibleChars("ABC-XXX .restored"))
++        assertEquals("␠hidden␠", visualizeInvisibleChars(" hidden "))
+     }
+ 
+     private fun mockFile(name: String, fileId: String = name): GuangyaFileItem =

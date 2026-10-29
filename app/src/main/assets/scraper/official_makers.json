@@ -1,0 +1,150 @@
+{
+  "_comment": "片商官网目录的起始集（12 家），与 OfficialMakerCatalog.BUILT_IN 逐条一致。加载方：context.assets.open(\"scraper/official_makers.json\") → OfficialMakerCatalog.parseCatalog() → OfficialMakerCatalog.merge(BUILT_IN, 解析结果)。detailUrlTemplate / searchUrlTemplate 留空是合法状态，含义是「这家站还没配置取数入口」：OfficialSiteScraper 会记一条日志跳过它，最终以 ParseError 说明「这家片商没有配置取数模板」，不会去猜 URL。填一条猜的模板更糟——站点回 404 会被记成 NotFound（「这家站没有这部片」），问题再也不会被发现。",
+  "_format": "sites[].id 是稳定主键（用户目录按它覆盖内置条目）；seriesPrefixes 是小写番号前缀；profile 取 Generic | InertiaJson | DefinitionList；{code} 在模板里替换成小写去空格的番号（ssis-001），{code_compact} 是去掉分隔符的写法（ssis001），{query} 是原样番号。",
+  "sites": [
+    {
+      "id": "s1",
+      "label": "S1",
+      "studio": "S1 NO.1 STYLE",
+      "homeUrl": "https://s1s1s1.com/",
+      "detailUrlTemplate": "",
+      "searchUrlTemplate": "",
+      "seriesPrefixes": ["ssis", "ssni", "snis", "sone", "soe"],
+      "profile": "Generic",
+      "releaseIsDeliveryDate": false,
+      "note": "S1 NO.1 STYLE 的站；模板待补（S1 系是 Next.js，注意它可能在 application/json 里给数据）"
+    },
+    {
+      "id": "moodyz",
+      "label": "MOODYZ",
+      "studio": "MOODYZ",
+      "homeUrl": "https://moodyz.com/",
+      "detailUrlTemplate": "",
+      "searchUrlTemplate": "",
+      "seriesPrefixes": ["mide", "midv", "mimk", "mifd", "miaa", "miab"],
+      "profile": "Generic",
+      "releaseIsDeliveryDate": false,
+      "note": "MOODYZ 的站；模板待补"
+    },
+    {
+      "id": "ideapocket",
+      "label": "IDEA POCKET",
+      "studio": "IdeaPocket",
+      "homeUrl": "https://ideapocket.com/",
+      "detailUrlTemplate": "",
+      "searchUrlTemplate": "",
+      "seriesPrefixes": ["ipx", "ipzz", "ipz", "iptd", "ipit", "ipsd"],
+      "profile": "Generic",
+      "releaseIsDeliveryDate": false,
+      "note": "IDEA POCKET 的站；模板待补"
+    },
+    {
+      "id": "madonna",
+      "label": "Madonna",
+      "studio": "Madonna",
+      "homeUrl": "https://www.madonna-av.com/",
+      "detailUrlTemplate": "",
+      "searchUrlTemplate": "",
+      "seriesPrefixes": ["jul", "juq", "jux", "juy", "juk", "juc", "jusd", "juvr"],
+      "profile": "Generic",
+      "releaseIsDeliveryDate": false,
+      "note": "Madonna 的站；模板待补（刻意不含 jufd / jfb：同一条前缀在 fitch-av.com 行也出现，歧义留给用户目录）"
+    },
+    {
+      "id": "faleno",
+      "label": "FALENO",
+      "studio": "FALENO",
+      "homeUrl": "https://faleno.jp/",
+      "detailUrlTemplate": "",
+      "searchUrlTemplate": "",
+      "seriesPrefixes": ["fsdss", "fcdss", "fns", "mgold", "jimmy"],
+      "profile": "Generic",
+      "releaseIsDeliveryDate": false,
+      "note": "FALENO 的站（对非日本出口可能直接 403，靠浏览器回落）；模板待补"
+    },
+    {
+      "id": "dahlia",
+      "label": "DAHLIA",
+      "studio": "DAHLIA",
+      "homeUrl": "https://dahlia-av.jp/",
+      "detailUrlTemplate": "",
+      "searchUrlTemplate": "",
+      "seriesPrefixes": ["dldss"],
+      "profile": "Generic",
+      "releaseIsDeliveryDate": false,
+      "note": "DAHLIA 的站（WordPress，页面没有结构化段时走定义列表档）；模板待补"
+    },
+    {
+      "id": "honnaka",
+      "label": "本中",
+      "studio": "本中",
+      "homeUrl": "https://honnaka.jp/",
+      "detailUrlTemplate": "",
+      "searchUrlTemplate": "",
+      "seriesPrefixes": ["hnd", "hndb", "hmn", "hnvr"],
+      "profile": "Generic",
+      "releaseIsDeliveryDate": false,
+      "note": "本中（Honnaka）的站；模板待补"
+    },
+    {
+      "id": "fitch",
+      "label": "Fitch",
+      "studio": "Fitch",
+      "homeUrl": "https://fitch-av.com/",
+      "detailUrlTemplate": "",
+      "searchUrlTemplate": "",
+      "seriesPrefixes": ["fcvr", "jufe", "juny", "nyb", "finh", "gcf", "nima"],
+      "profile": "Generic",
+      "releaseIsDeliveryDate": false,
+      "note": "Fitch 的站；模板待补（同样剔除 jufd / jfb，见 madonna 条目）"
+    },
+    {
+      "id": "ebody",
+      "label": "E-BODY",
+      "studio": "E-BODY",
+      "homeUrl": "https://www.av-e-body.com/",
+      "detailUrlTemplate": "",
+      "searchUrlTemplate": "",
+      "seriesPrefixes": ["ebvr", "ebod", "eyan"],
+      "profile": "Generic",
+      "releaseIsDeliveryDate": false,
+      "note": "E-BODY 的站；模板待补"
+    },
+    {
+      "id": "kirakira",
+      "label": "kira☆kira",
+      "studio": "kira☆kira",
+      "homeUrl": "https://kirakira-av.com/",
+      "detailUrlTemplate": "",
+      "searchUrlTemplate": "",
+      "seriesPrefixes": ["kivr", "blk", "kibd", "kifd", "kird", "kisd"],
+      "profile": "Generic",
+      "releaseIsDeliveryDate": false,
+      "note": "kira☆kira 的站；模板待补"
+    },
+    {
+      "id": "attackers",
+      "label": "ATTACKERS",
+      "studio": "ATTACKERS",
+      "homeUrl": "https://attackers.net/",
+      "detailUrlTemplate": "",
+      "searchUrlTemplate": "",
+      "seriesPrefixes": ["atvr", "rbk", "rbd", "atid", "atkd", "shkd", "adn", "sspd", "azsd"],
+      "profile": "Generic",
+      "releaseIsDeliveryDate": false,
+      "note": "ATTACKERS 的站；模板待补"
+    },
+    {
+      "id": "maxa",
+      "label": "MAX-A",
+      "studio": "MAX-A",
+      "homeUrl": "https://www.max-a.co.jp/",
+      "detailUrlTemplate": "",
+      "searchUrlTemplate": "",
+      "seriesPrefixes": [],
+      "profile": "Generic",
+      "releaseIsDeliveryDate": false,
+      "note": "MAX-A 的站：域名有据（web/integrations/jav-sites.json），前缀与模板都待补，补上前缀之前这家永远不会被 route 选中——这是有意的占位条目，不是遗漏"
+    }
+  ]
+}

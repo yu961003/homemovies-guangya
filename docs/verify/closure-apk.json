@@ -1,0 +1,159 @@
+{
+  "libroot": "apkchk/lib",
+  "sysroot": "D:/andtools/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib",
+  "api": 26,
+  "abis": {
+    "arm64-v8a": {
+      "libs": [
+        "libandroidx.graphics.path.so",
+        "libavcodec.so",
+        "libavdevice.so",
+        "libavfilter.so",
+        "libavformat.so",
+        "libavutil.so",
+        "libc++_shared.so",
+        "libmpv.so",
+        "libplayer.so",
+        "libswresample.so",
+        "libswscale.so"
+      ],
+      "count": 11,
+      "player_links_libmpv": true,
+      "libmpv_api_missing": [],
+      "min_load_align": "0x4000",
+      "sysroot_stubs_used": [
+        "libEGL.so",
+        "libGLESv1_CM.so",
+        "libGLESv2.so",
+        "libGLESv3.so",
+        "libOpenMAXAL.so",
+        "libOpenSLES.so",
+        "libaaudio.so",
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "libjnigraphics.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libnativewindow.so",
+        "libstdc++.so",
+        "libsync.so",
+        "libvulkan.so",
+        "libz.so"
+      ],
+      "unresolved_symbols": {},
+      "weak_undefined_symbols": {
+        "libavcodec.so": [
+          "memfd_create"
+        ],
+        "libavutil.so": [
+          "memfd_create"
+        ],
+        "libmpv.so": [
+          "memfd_create"
+        ],
+        "libplayer.so": [
+          "memfd_create"
+        ],
+        "libswscale.so": [
+          "memfd_create"
+        ]
+      },
+      "cross_check_agrees": true,
+      "problems": []
+    },
+    "armeabi-v7a": {
+      "libs": [
+        "libandroidx.graphics.path.so",
+        "libavcodec.so",
+        "libavdevice.so",
+        "libavfilter.so",
+        "libavformat.so",
+        "libavutil.so",
+        "libc++_shared.so",
+        "libmpv.so",
+        "libplayer.so",
+        "libswresample.so",
+        "libswscale.so"
+      ],
+      "count": 11,
+      "player_links_libmpv": true,
+      "libmpv_api_missing": [],
+      "min_load_align": "0x4000",
+      "sysroot_stubs_used": [
+        "libEGL.so",
+        "libGLESv1_CM.so",
+        "libGLESv2.so",
+        "libGLESv3.so",
+        "libOpenMAXAL.so",
+        "libOpenSLES.so",
+        "libaaudio.so",
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "libjnigraphics.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libnativewindow.so",
+        "libstdc++.so",
+        "libsync.so",
+        "libvulkan.so",
+        "libz.so"
+      ],
+      "unresolved_symbols": {},
+      "weak_undefined_symbols": {},
+      "cross_check_agrees": true,
+      "problems": []
+    },
+    "x86_64": {
+      "libs": [
+        "libandroidx.graphics.path.so",
+        "libavcodec.so",
+        "libavdevice.so",
+        "libavfilter.so",
+        "libavformat.so",
+        "libavutil.so",
+        "libc++_shared.so",
+        "libmpv.so",
+        "libplayer.so",
+        "libswresample.so",
+        "libswscale.so"
+      ],
+      "count": 11,
+      "player_links_libmpv": true,
+      "libmpv_api_missing": [],
+      "min_load_align": "0x4000",
+      "sysroot_stubs_used": [
+        "libEGL.so",
+        "libGLESv1_CM.so",
+        "libGLESv2.so",
+        "libGLESv3.so",
+        "libOpenMAXAL.so",
+        "libOpenSLES.so",
+        "libaaudio.so",
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "libjnigraphics.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libnativewindow.so",
+        "libstdc++.so",
+        "libsync.so",
+        "libvulkan.so",
+        "libz.so"
+      ],
+      "unresolved_symbols": {},
+      "weak_undefined_symbols": {},
+      "cross_check_agrees": true,
+      "problems": []
+    }
+  },
+  "ok": true
+}

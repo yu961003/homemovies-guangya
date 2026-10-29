@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 全量备份排除规则（Android 11 及以下 / API < 31） -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="secure_settings.xml" />
+    <exclude domain="sharedpref" path="cloud115.xml" />
+    <exclude domain="sharedpref" path="guangya_tokens.xml" />
+    <exclude domain="file" path="115cookies/" />
+</full-backup-content>

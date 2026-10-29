@@ -1,0 +1,16 @@
+--- a/MPV-PORT-README.md	2026-10-27 00:08:30.000000000 +0800
++++ b/MPV-PORT-README.md	2026-10-29 01:06:21.262714900 +0800
+@@ -8,6 +8,13 @@
+ > `app/src/main/jniLibs/<abi>/`。**不放也能正常构建与运行**：CMake 会自动退化编出
+ > 空实现的 `libplayer.so`，App 检测到不可用后把切换入口置灰并说明原因，ExoPlayer 全程可用。
+ > 见 `app/src/main/jniLibs/README.md`。
++>
++> **2026-10-28 修复**：上面这条「能构建」的降级路径，正是
++> 「未检测到 libmpv.so：原生库缺失」的成因——`jniLibs` 为空时整条链会**静默**退化，构建照样绿。
++> 现已改为：`scripts/assemble-libmpv-jnilibs.py` 从预编译 AAR 装配三个 ABI 的整套 `.so`，
++> 配合 `abiFilters` 白名单与构建期门禁 `verifyMpvNativeLibs`，缺库直接构建失败而不是运行期降级。
++> 根因链、产物实测证据、复现步骤与**运行期验证的未跑通记录**见
++> [`docs/LIBMPV-SHIP-20261028.md`](docs/LIBMPV-SHIP-20261028.md)。
+ 
+ ## 三份文档
+ 

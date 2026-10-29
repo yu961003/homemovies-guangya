@@ -1,0 +1,66 @@
+package com.example.localmovielibrarz.scraper
+
+import com.example.localmovielibrarz.util.NumberRecognitionRules
+import java.util.Locale
+
+object MovieNumberExtractor {
+    private val numberPattern = Regex("""(?i)(?:^|[^a-z0-9])([a-z0-9]{2,12}?)([-_\s]?)(\d{2,6})([a-z]{0,2})(?=$|[^a-z0-9])""")
+
+    fun extract(
+        fileName: String,
+        ignoredSuffixes: Set<String> = NumberRecognitionRules.ignoredSuffixes()
+    ): String? = extractNumber(fileName, ignoredSuffixes, preserveNumericPrefixAlias = false)
+
+    fun extractDisplayNumber(
+        fileName: String,
+        ignoredSuffixes: Set<String> = NumberRecognitionRules.ignoredSuffixes()
+    ): String? = extractNumber(fileName, ignoredSuffixes, preserveNumericPrefixAlias = true)
+
+    private fun extractNumber(
+        fileName: String,
+        ignoredSuffixes: Set<String>,
+        preserveNumericPrefixAlias: Boolean
+    ): String? {
+        val rawBaseName = fileName.substringBeforeLast('.', fileName)
+        val stripResult = NumberRecognitionRules.stripIgnoredSuffix(rawBaseName, ignoredSuffixes)
+        val baseName = stripResult.baseName
+        val match = numberPattern.findAll(baseName)
+            .filter { match -> match.groupValues[1].any { it.isLetter() } }
+            .map { match ->
+                NumberMatch(
+                    match = match,
+                    hasExplicitSeparator = match.groupValues.getOrNull(2)?.isNotEmpty() == true,
+                    strippedIgnoredSuffix = stripResult.stripped
+                )
+            }
+            .maxWithOrNull(
+                compareBy<NumberMatch> { it.hasExplicitSeparator }
+                    .thenBy { it.match.range.first }
+            )
+            ?.match
+            ?: return null
+        val rawPrefix = match.groupValues[1]
+        val prefix = NumberRecognitionRules.canonicalizePrefix(rawPrefix)
+        val outputPrefix = if (preserveNumericPrefixAlias) {
+            NumberRecognitionRules.numericPrefixAliasFor(rawPrefix) ?: prefix
+        } else {
+            prefix
+        }
+        val separator = match.groupValues.getOrNull(2).orEmpty()
+        val number = NumberRecognitionRules.normalizeDigits(
+            prefix = prefix,
+            digits = match.groupValues[3],
+            hasExplicitSeparator = separator.isNotEmpty(),
+            strippedIgnoredSuffix = stripResult.stripped
+        )
+        val suffix = match.groupValues[4].uppercase(Locale.ROOT)
+        val suffixAsSegment = NumberRecognitionRules.isAttachedLetterSegment(prefix, suffix)
+        return "$outputPrefix-$number${if (suffixAsSegment) "" else suffix}"
+    }
+
+    private data class NumberMatch(
+        val match: MatchResult,
+        val hasExplicitSeparator: Boolean,
+        val strippedIgnoredSuffix: Boolean
+    )
+}

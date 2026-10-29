@@ -1,0 +1,352 @@
+package com.example.localmovielibrarz.ui.filter
+import com.example.localmovielibrarz.ui.AppRadius
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.localmovielibrarz.data.local.MovieEntity
+import com.example.localmovielibrarz.ui.home.HomeImageMode
+import com.example.localmovielibrarz.ui.shared.MovieArtwork
+import com.example.localmovielibrarz.util.extractMovieNumberInfo
+import com.example.localmovielibrarz.util.partSortKey
+import kotlinx.coroutines.flow.collectLatest
+import java.util.Locale
+import com.example.localmovielibrarz.ui.ContentAlphaMin
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import com.example.localmovielibrarz.ui.shared.ListEndHint
+
+private val ResultBackground: androidx.compose.ui.graphics.Color
+    @Composable get() = MaterialTheme.colorScheme.background
+
+private val ResultPanel: androidx.compose.ui.graphics.Color
+    @Composable get() = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.075f)
+private const val FILTER_INITIAL_COUNT = 90
+private const val FILTER_PAGE_SIZE = 60
+private const val FILTER_PREFETCH_THRESHOLD = 18
+
+@Composable
+fun FilterResultScreen(
+    viewModel: FilterResultViewModel,
+    onBack: () -> Unit,
+    onMovieClick: (Long) -> Unit,
+    imageMode: HomeImageMode = HomeImageMode.Poster
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val gridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
+    var visibleCount by rememberSaveable { mutableStateOf(FILTER_INITIAL_COUNT) }
+    var activeFilterKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var sortModeName by rememberSaveable { mutableStateOf(FilterResultSortMode.ReleaseDate.name) }
+    val sortMode = remember(sortModeName) {
+        FilterResultSortMode.entries.firstOrNull { it.name == sortModeName } ?: FilterResultSortMode.ReleaseDate
+    }
+    val displayMovies = remember(uiState.movies, uiState.filterType, sortModeName) {
+        if (uiState.filterType == "actor") {
+            sortActorMovies(uiState.movies, sortMode)
+        } else {
+            uiState.movies
+        }
+    }
+    val visibleMovies = remember(displayMovies, visibleCount) {
+        displayMovies.take(visibleCount.coerceIn(0, displayMovies.size))
+    }
+
+    val resetKey = remember(uiState.filterType, uiState.filterValue, sortModeName) {
+        if (uiState.filterType == "actor") {
+            "${uiState.filterType}:${uiState.filterValue}:$sortModeName"
+        } else {
+            "${uiState.filterType}:${uiState.filterValue}"
+        }
+    }
+
+    LaunchedEffect(resetKey) {
+        if (uiState.filterType.isBlank() && uiState.filterValue.isBlank()) return@LaunchedEffect
+        if (activeFilterKey != resetKey) {
+            activeFilterKey = resetKey
+            visibleCount = FILTER_INITIAL_COUNT.coerceAtMost(displayMovies.size)
+            if (displayMovies.isNotEmpty()) {
+                gridState.scrollToItem(0)
+            }
+        }
+    }
+
+    LaunchedEffect(displayMovies.size) {
+        if (visibleCount == 0 && displayMovies.isNotEmpty()) {
+            visibleCount = FILTER_INITIAL_COUNT.coerceAtMost(displayMovies.size)
+        } else if (visibleCount > displayMovies.size) {
+            visibleCount = displayMovies.size
+        }
+    }
+
+    LaunchedEffect(gridState, displayMovies.size) {
+        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+            .collectLatest { lastVisibleIndex ->
+                if (
+                    displayMovies.size > visibleCount &&
+                    lastVisibleIndex >= visibleCount - FILTER_PREFETCH_THRESHOLD
+                ) {
+                    visibleCount = (visibleCount + FILTER_PAGE_SIZE).coerceAtMost(displayMovies.size)
+                }
+            }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(ResultBackground)
+    ) {
+        FilterResultTopBar(
+            title = uiState.title,
+            count = displayMovies.size,
+            onBack = onBack
+        )
+        if (uiState.filterType == "actor") {
+            ActorSortBar(
+                selectedSortMode = sortMode,
+                onSortModeSelected = { sortModeName = it.name }
+            )
+        }
+        if (displayMovies.isEmpty()) {
+            FilterEmptyState()
+        } else {
+            LazyVerticalGrid(
+                state = gridState,
+                columns = GridCells.Adaptive(minSize = if (imageMode == HomeImageMode.Thumb) 170.dp else 112.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+                horizontalArrangement = Arrangement.spacedBy(13.dp)
+            ) {
+                items(
+                    items = visibleMovies,
+                    key = { it.id },
+                    contentType = { if (imageMode == HomeImageMode.Thumb) "filter-thumb-card" else "filter-poster-card" }
+                ) { movie ->
+                    ResultPosterCard(movie = movie, imageMode = imageMode, onClick = { onMovieClick(movie.id) })
+                }
+                // H+1 轮：分页到底提示
+                if (visibleMovies.size >= displayMovies.size && displayMovies.size > FILTER_INITIAL_COUNT) {
+                    item(key = "list-end", contentType = "list-end", span = { GridItemSpan(maxLineSpan) }) {
+                        ListEndHint(count = displayMovies.size)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActorSortBar(
+    selectedSortMode: FilterResultSortMode,
+    onSortModeSelected: (FilterResultSortMode) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        FilterChip(
+            selected = selectedSortMode == FilterResultSortMode.ReleaseDate,
+            onClick = { onSortModeSelected(FilterResultSortMode.ReleaseDate) },
+            label = { Text("发行时间") }
+        )
+        FilterChip(
+            selected = selectedSortMode == FilterResultSortMode.Number,
+            onClick = { onSortModeSelected(FilterResultSortMode.Number) },
+            label = { Text("番号") }
+        )
+    }
+}
+
+@Composable
+private fun FilterResultTopBar(
+    title: String,
+    count: Int,
+    onBack: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surfaceVariant, ResultBackground)))
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .padding(start = 10.dp, end = 18.dp, top = 6.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        IconButton(
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)),
+            onClick = onBack
+        ) {
+            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回", tint = MaterialTheme.colorScheme.onSurface)
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title.ifBlank { "\u7B5B\u9009\u7ED3\u679C" },
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "$count \u90E8\u5F71\u7247",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
+
+@Composable
+private fun ResultPosterCard(movie: MovieEntity, imageMode: HomeImageMode, onClick: () -> Unit) {
+    Column {
+        Card(
+            onClick = onClick,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(if (imageMode == HomeImageMode.Thumb) 16f / 9f else 2f / 3f),
+            shape = AppRadius.SM,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            MovieArtwork(
+                movie = movie,
+                preferThumb = imageMode == HomeImageMode.Thumb,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = movie.title,
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        movie.year?.let {
+            Text(
+                text = it.toString(),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = ContentAlphaMin),
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+    }
+}
+
+@Composable
+private fun FilterEmptyState() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(18.dp)
+            .clip(AppRadius.XL)
+            .background(ResultPanel),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "\u6CA1\u6709\u627E\u5230\u76F8\u5173\u5F71\u7247",
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+private enum class FilterResultSortMode {
+    ReleaseDate,
+    Number
+}
+
+private data class ActorNumberSortKey(
+    val prefix: String,
+    val number: Int,
+    val partOrder: Int,
+    val suffix: String
+)
+
+private fun sortActorMovies(movies: List<MovieEntity>, sortMode: FilterResultSortMode): List<MovieEntity> =
+    when (sortMode) {
+        FilterResultSortMode.ReleaseDate -> movies.sortedWith(
+            compareByDescending<MovieEntity> { it.releaseSortKey() }
+                .thenBy { it.sortTitle.ifBlank { it.title }.lowercase(Locale.ROOT) }
+        )
+        FilterResultSortMode.Number -> movies
+            .map { movie -> movie to movie.actorNumberSortKey() }
+            .sortedWith(
+                compareBy<Pair<MovieEntity, ActorNumberSortKey?>>({ it.second == null })
+                    .thenBy { it.second?.prefix.orEmpty() }
+                    .thenBy { it.second?.number ?: Int.MAX_VALUE }
+                    .thenBy { it.second?.partOrder ?: Int.MAX_VALUE }
+                    .thenBy { it.second?.suffix.orEmpty() }
+                    .thenBy { it.first.sortTitle.ifBlank { it.first.title }.lowercase(Locale.ROOT) }
+            )
+            .map { it.first }
+    }
+
+private fun MovieEntity.releaseSortKey(): String =
+    premiered?.trim()
+        ?.replace('/', '-')
+        ?.takeIf { it.isNotBlank() }
+        ?: year?.let { "%04d".format(it) }
+        ?: ""
+
+private fun MovieEntity.actorNumberSortKey(): ActorNumberSortKey? {
+    val source = listOf(videoName, title, originalTitle.orEmpty()).joinToString(" ")
+    val info = extractMovieNumberInfo(source) ?: return null
+    val match = ACTOR_NUMBER_SORT_PATTERN.find(info.number) ?: return null
+    return ActorNumberSortKey(
+        prefix = match.groupValues[1].uppercase(Locale.ROOT),
+        number = match.groupValues[2].toIntOrNull() ?: return null,
+        partOrder = partSortKey(info.partLabel),
+        suffix = match.groupValues.getOrNull(3).orEmpty().uppercase(Locale.ROOT)
+    )
+}
+
+private val ACTOR_NUMBER_SORT_PATTERN =
+    Regex("""(?i)^([a-z0-9]{2,12}?)-(\d{2,6})([a-z]{0,2})$""")

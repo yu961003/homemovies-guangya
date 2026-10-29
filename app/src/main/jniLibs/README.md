@@ -1,0 +1,111 @@
+# jniLibs：libmpv 预编译产物放置位置
+
+`libmpv.so` 及其兄弟库是**外部预编译产物**，本仓库的历史交付包里不带二进制（体积、许可、
+ABI 组合问题）。工作副本里装配好的 `.so` 也不进交付 zip —— 拿到源码后按下文任一种方式装配。
+
+三个 ABI 目录已建好：
+
+```
+app/src/main/jniLibs/
+├── arm64-v8a/       ← 主发行 ABI
+├── armeabi-v7a/     ← 老设备
+└── x86_64/          ← 模拟器
+```
+
+## 每个 ABI 目录里要放什么
+
+**不是只放 `libmpv.so` 一个文件。** 下面是 `libmpv.so` 实测的 `DT_NEEDED`（`llvm-readelf -d`）：
+
+```
+libm.so  libz.so  libdl.so  libc.so  libandroid.so  libOpenSLES.so  libEGL.so   ← 系统库，不打包
+libavcodec.so  libavformat.so  libavutil.so  libswresample.so  libswscale.so
+libavfilter.so  libavdevice.so  libc++_shared.so                              ← 必须自己带
+```
+
+所以每个 ABI 目录里是 **9 个文件**：
+
+```
+libmpv.so  libavcodec.so  libavdevice.so  libavfilter.so  libavformat.so
+libavutil.so  libswresample.so  libswscale.so  libc++_shared.so
+```
+
+实测体积（未压缩）：`arm64-v8a` 24 MB、`armeabi-v7a` 22 MB、`x86_64` 29 MB。
+
+> 注意：`libass` / `libplacebo` / `libluajit` / `libcurl` **不在**这份清单里，它们被静态链进
+> `libmpv.so` 了。别照着旧文档去找这些文件——不存在，也不该存在。
+
+## 怎么产出
+
+### 方式 A：从预编译 AAR 装配（Windows / Linux 都能跑，推荐）
+
+`dev.jdtech.mpv:libmpv:1.0.0` 的 AAR 里带 `jni/<abi>/*.so`（4 个 ABI、40 个 `.so`）。
+解包后用本仓库脚本按 `DT_NEEDED` 闭包装配，不靠人工挑文件：
+
+```bash
+# 直接给 .aar（脚本自己取 jni/<abi>/*.so，不用先解包）
+python scripts/assemble-libmpv-jnilibs.py --source libmpv-1.0.0.aar
+
+# 或：手工解包后指向 jni/
+unzip -q libmpv-1.0.0.aar -d build/libmpv-aar
+python scripts/assemble-libmpv-jnilibs.py --source build/libmpv-aar/jni
+
+# 只校验现有目录是否成组（不写文件）
+python scripts/assemble-libmpv-jnilibs.py --verify-only
+```
+
+> 交付 zip 不带二进制，所以在装配之前 `./gradlew :app:assembleDebug` 会在
+> `verifyMpvNativeLibs` 上报「缺 libmpv.so / 缺 libav*.so」——那是门禁按设计拦你，
+> 跑一次上面的装配即可。
+
+脚本会**拒绝**拷贝 AAR 自带的 `libplayer.so`（那是上游的 JNI 封装，与本工程 `cpp/` 编出的同名，
+混进来会重名）。装配后立即自检：每个非系统 `DT_NEEDED` 必须同 ABI 存在，否则退出码非 0。
+
+AAR 的 sha256：`df146592480fc8418415a06b1f1a1d6318b0088e21f52254b0e9a82b61ca8fa2`；
+全套 27 个 `.so` 的逐文件 sha256 见 `docs/verify/jnilibs-sha256.json`。
+
+### 方式 B：用本仓库脚本从源码编（Linux / macOS）
+
+```bash
+bash scripts/fetch-libmpv.sh --clone-only      # 准备上游构建链（幂等）
+bash scripts/fetch-libmpv.sh --build all       # 编 mpv 目标并拷整组 .so 进 jniLibs
+bash scripts/fetch-libmpv.sh --verify          # ELF 魔数 / 机器码 / 体积校验
+```
+
+- **Windows 不支持**：上游 `mpv-android/buildscripts` 要求 POSIX 工具链，脚本检测到
+  MINGW/MSYS/CYGWIN 会直接告警。
+
+### 方式 C：用 CI
+
+`.github/workflows/build-libmpv.yml` 手动触发（`workflow_dispatch`）：Actions → `build-libmpv` →
+Run workflow；跑完下载 artifact `libmpv-<abi>`，解压覆盖到 `app/src/main/jniLibs/<abi>/`。
+单 ABI 在免费 runner 上约 40–70 分钟，已设 240 分钟超时与 `buildscripts/{sdk,deps,prefix}` 缓存。
+
+### 方式 D：换用自己的 Yaozhi 定制构建
+
+直接把同一组 `.so` 覆盖进来即可，宿主侧无需改动——宿主只依赖
+`app/src/main/cpp/include/mpv/client.h` 里声明的 libmpv C API。
+
+## 缺库时会发生什么（2026-10-28 改过）
+
+**以前**：`libmpv.so` 缺失时 CMake 自动改用 `src/main/cpp/src/stub.cpp` 编一个空壳
+`libplayer.so`（`MPV_AVAILABLE=0`），`assembleDebug` **仍然成功**。运行期
+`PlaybackEngineFactory.probeMpv()` 返回「未检测到 libmpv.so」，界面把 MPV 置灰。
+这条"设计内的降级路径"就是故障的成因：构建绿、装得上、点开视频才发现 mpv 永远不可用。
+
+**现在**：
+
+1. `abiFilters` 钉住 `arm64-v8a` / `armeabi-v7a` / `x86_64`，与这里的目录一一对应；
+2. `verifyMpvNativeLibs`（`app/build.gradle.kts` 末尾）在构建期校验每个 ABI 的 9 个文件是否成套，
+   缺一个就**构建失败**，不再静默降级；
+3. `connectedDebugAndroidTest` 里的 `MpvPlaybackSmokeTest` 覆盖运行期四级（打包 / 加载 / 解码 / 渲染）。
+
+CMake 的 stub 分支仍然保留（用于"只想跑 ExoPlayer"的临时场景），但正常构建会被门禁拦下。
+
+## 注意
+
+- 三个 ABI 不必都放；只放 `arm64-v8a` 也能构建，只是 32 位设备上 mpv 不可用。
+- 文件名必须严格是 `libmpv.so`（`CMakeLists.txt` 里按这个字面量查找）。
+- 不需要额外配置 `jniLibs.srcDirs`，AGP 默认就认 `src/main/jniLibs/`。
+- 各 `.so` 之间不要混用不同 STL / 不同 NDK 版本构建的产物，会撞符号。
+- `arm64-v8a` / `x86_64` 的 `.so` 需满足 16 KB 页对齐（`p_align >= 0x4000`）；AAR 那套是满足的，
+  自己编老版本 NDK 产物可能不满足。

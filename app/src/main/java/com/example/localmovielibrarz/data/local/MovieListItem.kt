@@ -1,0 +1,57 @@
+package com.example.localmovielibrarz.data.local
+
+data class MovieListItem(
+    val id: Long,
+    val videoUri: String,
+    val videoName: String,
+    val sortTitle: String,
+    val title: String,
+    val originalTitle: String?,
+    val year: Int?,
+    val premiered: String?,
+    val runtimeMinutes: Int?,
+    val mpaa: String?,
+    val genres: List<String>,
+    val tags: List<String>,
+    val rating: Double?,
+    val posterUri: String?,
+    val fanartUri: String?,
+    val thumbUri: String?,
+    val scannedAtMillis: Long,
+    val isFavorite: Boolean,
+    val isWatched: Boolean,
+    val updatedAt: Long
+) {
+    fun toMovieEntity(): MovieEntity =
+        MovieEntity(
+            id = id,
+            libraryRootUri = "",
+            videoUri = videoUri,
+            videoName = videoName,
+            sortTitle = sortTitle,
+            title = title,
+            originalTitle = originalTitle,
+            plot = null,
+            outline = null,
+            year = year,
+            premiered = premiered,
+            runtimeMinutes = runtimeMinutes,
+            mpaa = mpaa,
+            studios = emptyList(),
+            series = null,
+            directors = emptyList(),
+            actors = emptyList(),
+            genres = genres,
+            tags = tags,
+            rating = rating,
+            uniqueIds = emptyList(),
+            posterUri = posterUri,
+            fanartUri = fanartUri,
+            thumbUri = thumbUri,
+            nfoUri = null,
+            scannedAtMillis = scannedAtMillis,
+            isFavorite = isFavorite,
+            isWatched = isWatched,
+            updatedAt = updatedAt
+        )
+}

@@ -1,0 +1,215 @@
+name: build-libmpv
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 在 CI 里构建 libmpv.so + 全套 FFmpeg 兄弟库，作为 artifact 供下载后放入
+# app/src/main/jniLibs/<abi>/。
+#
+# 为什么不在本地/Gradle 里构建：libmpv 是 meson + ninja 的 CMake 之外的世界，
+# 且需要完整交叉编译工具链（FFmpeg/libass/libplacebo/freetype/fontconfig/lua/
+# curl/mbedtls/dav1d/libxml2 一整棵树），单次全量构建 40~90 分钟、十余 GB 磁盘。
+# 把它放在 CI 里跑，Gradle 侧只做「IMPORTED 链接 + stub 降级」，职责清晰。
+#
+# 触发方式：
+#   - 手动 workflow_dispatch（推荐，默认只编 arm64-v8a 省时间）
+#   - push 到 release/** 分支时自动跑全 ABI
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      archs:
+        description: '要构建的架构（空格分隔）: arm64 / armv7l / x86_64'
+        required: false
+        default: 'arm64'
+      full_abis:
+        description: '构建全部 ABI（arm64 + armv7l + x86_64）'
+        required: false
+        type: boolean
+        default: false
+      yaozhi:
+        description: '打入 Yaozhi 通用补丁（VVC / 图形字幕色彩空间 / HDR Vivid / hwdec 池等）'
+        required: false
+        type: boolean
+        default: false
+      yaozhi_ref:
+        description: 'Yaozhil/mpv-Yaozhi 的提交或分支（yaozhi=true 时生效）'
+        required: false
+        default: 'a8fdb403913aaee8f2a41b133c54a12f99537936'
+  push:
+    branches: ['release/**']
+    paths:
+      - 'scripts/fetch-libmpv.sh'
+      - '.github/workflows/build-libmpv.yml'
+
+concurrency:
+  group: build-libmpv-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 上游 buildscripts 的源码与 prefix 都放在这里，缓存友好
+  MPV_ANDROID_REF: '73a7c69e5f3d9a7e9b3a27e38ca5a8ed702cf866'
+
+jobs:
+  build:
+    name: libmpv (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            abi: arm64-v8a
+          - arch: armv7l
+            abi: armeabi-v7a
+          - arch: x86_64
+            abi: x86_64
+
+    steps:
+      - name: 选择是否构建该 ABI
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          want_all="${{ github.event.inputs.full_abis || 'false' }}"
+          want="${{ github.event.inputs.archs || 'arm64' }}"
+          if [ "$want_all" = "true" ] || [ "${{ github.event_name }}" = "push" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif echo " $want " | grep -q " ${{ matrix.arch }} "; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "跳过 ${{ matrix.arch }}（本次请求：$want）"
+          fi
+
+      - name: Checkout 工程
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      # 补丁仓库检出到**工作区内**的 mpv-Yaozhi-core：actions/checkout 的 path 只在
+      # $GITHUB_WORKSPACE 之下有保证，写 ../foo 属于未定义行为。构建步骤再用绝对路径
+      # 显式传给 --yaozhi-repo，不依赖脚本的默认相对路径。
+      # 单独 checkout 而不是 submodule：补丁仓库与工程独立演进，绑成 submodule 会让
+      # 「只想升级补丁」变成一次工程提交。
+      - name: Checkout Yaozhi 补丁仓库
+        if: steps.gate.outputs.run == 'true' && github.event.inputs.yaozhi == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Yaozhil/mpv-Yaozhi
+          ref: ${{ github.event.inputs.yaozhi_ref }}
+          path: mpv-Yaozhi-core
+          fetch-depth: 1
+
+      - name: 安装构建依赖
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git curl wget unzip zip python3 python3-pip \
+            meson ninja-build pkg-config nasm yasm autoconf automake libtool \
+            cmake gperf bison flex
+
+      # 缓存：上游 buildscripts/deps（FFmpeg 等源码）+ buildscript SDK/NDK + prefix
+      # 这是把 90 分钟压到 10 分钟的关键；key 里带 ref，换版本会自动失效。
+      - name: 缓存 mpv-android 构建树
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/mpv-android/buildscripts/sdk
+            build/mpv-android/buildscripts/deps
+            build/mpv-android/buildscripts/prefix
+          # key 里带 yaozhi 标记：打了补丁的 prefix 与未打补丁的不能共用缓存，
+          # 否则会出现「勾了 yaozhi 却拿到旧产物」这种极难察觉的假成功。
+          key: mpv-android-${{ matrix.arch }}-${{ env.MPV_ANDROID_REF }}-yz${{ github.event.inputs.yaozhi == 'true' && '1' || '0' }}-v1
+
+      - name: 构建 libmpv
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/fetch-libmpv.sh
+          args=(--build "${{ matrix.arch }}")
+          if [ "${{ github.event.inputs.yaozhi }}" = "true" ]; then
+            # 显式传补丁仓库路径，不依赖脚本里的 ../mpv-Yaozhi-core 默认值
+            args+=(--yaozhi --yaozhi-repo "$GITHUB_WORKSPACE/mpv-Yaozhi-core")
+          fi
+          ./scripts/fetch-libmpv.sh "${args[@]}"
+
+      - name: 产物清单
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la app/src/main/jniLibs/${{ matrix.abi }}/
+          du -sh app/src/main/jniLibs/${{ matrix.abi }}/
+
+      # 16 KB 页对齐硬门禁（Android 15 / API 35）。
+      # fetch-libmpv.sh 内部已经查过一遍，这里再独立查一次是为了让「对齐报告」
+      # 出现在 workflow 日志里——否则一旦失败，用户只看到脚本退出码，看不到
+      # 到底是哪个 .so 没对齐。上传前拦下比上传后被 Play Console 退回便宜得多。
+      - name: 16 KB 页对齐检查
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="app/src/main/jniLibs/${{ matrix.abi }}"
+          fails=0
+          printf '%-34s %-10s %s\n' "SO" "p_align" "判定"
+          for f in "$dir"/*.so; do
+            [ -e "$f" ] || continue
+            klass=$(od -An -tu1 -j4 -N1 "$f" | tr -d ' ')
+            if [ "$klass" = "2" ]; then
+              phoff=$(od -An -tu8 -j32 -N8 "$f" | tr -d ' ')
+              phes=$(od -An -tu2 -j54 -N2 "$f" | tr -d ' ')
+              phnum=$(od -An -tu2 -j56 -N2 "$f" | tr -d ' ')
+              aoff=48; asize=8
+            else
+              phoff=$(od -An -tu4 -j28 -N4 "$f" | tr -d ' ')
+              phes=$(od -An -tu2 -j42 -N2 "$f" | tr -d ' ')
+              phnum=$(od -An -tu2 -j44 -N2 "$f" | tr -d ' ')
+              aoff=28; asize=4
+            fi
+            min=999999
+            i=0
+            while [ "$i" -lt "$phnum" ]; do
+              base=$((phoff + i * phes))
+              t=$(od -An -tu4 -j"$base" -N4 "$f" | tr -d ' ')
+              if [ "$t" = "1" ]; then
+                if [ "$asize" = "8" ]; then
+                  a=$(od -An -tu8 -j$((base + aoff)) -N8 "$f" | tr -d ' ')
+                else
+                  a=$(od -An -tu4 -j$((base + aoff)) -N4 "$f" | tr -d ' ')
+                fi
+                [ "$a" -lt "$min" ] && min="$a"
+              fi
+              i=$((i + 1))
+            done
+            if [ "$min" -ge 16384 ]; then
+              printf '%-34s 0x%-8x OK\n' "$(basename "$f")" "$min"
+            else
+              printf '%-34s 0x%-8x **未对齐**\n' "$(basename "$f")" "$min"
+              fails=$((fails + 1))
+            fi
+          done
+          if [ "$fails" -gt 0 ]; then
+            echo ""
+            echo "::error::$fails 个 .so 未按 16 KB 对齐，Android 15 设备无法加载。"
+            echo "上游 buildscripts 需使用 NDK r28+，或确认 fetch-libmpv.sh 里注入的"
+            echo "LDFLAGS（-Wl,-z,max-page-size=16384）确实穿透到了 ninja 规则。"
+            exit 1
+          fi
+          echo ""
+          echo "全部 .so 已按 16 KB 对齐。"
+
+      - name: 上传 artifact
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-${{ matrix.abi }}${{ github.event.inputs.yaozhi == 'true' && '-yaozhi' || '' }}
+          path: app/src/main/jniLibs/${{ matrix.abi }}/
+          if-no-files-found: error
+          retention-days: 30

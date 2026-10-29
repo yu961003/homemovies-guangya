@@ -1,0 +1,30 @@
+package com.example.localmovielibrarz.ui.favorites
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
+import com.example.localmovielibrarz.data.local.MovieEntity
+import com.example.localmovielibrarz.data.repository.MovieRepository
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+
+class FavoritesViewModel(repository: MovieRepository) : ViewModel() {
+    val uiState: StateFlow<FavoritesUiState> = repository.observeFavoriteMovies()
+        .map { movies -> FavoritesUiState(movies = movies) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FavoritesUiState())
+
+    companion object {
+        fun factory(repository: MovieRepository): ViewModelProvider.Factory =
+            object : ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                    FavoritesViewModel(repository) as T
+            }
+    }
+}
+
+data class FavoritesUiState(
+    val movies: List<MovieEntity> = emptyList()
+)

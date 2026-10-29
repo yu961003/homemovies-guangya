@@ -1,0 +1,10 @@
+verify-native-closure.py — 对打包后 APK 内 lib/<abi> 的原生闭包核验
+输入：app/build/outputs/apk/debug/app-debug.apk 解包出的 lib/ 目录
+sysroot：NDK r27 sysroot/usr/lib，api=26
+
+总判定 ok = True
+
+ABI           libs  unresolved  problems  cross-check
+arm64-v8a       11           0         0         True
+armeabi-v7a     11           0         0         True
+x86_64          11           0         0         True
