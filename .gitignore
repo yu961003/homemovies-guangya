@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# 构建产物：仓库只存源码与预编译原生库，任何 build/ 与 .gradle/ 都不该进来
+# ─────────────────────────────────────────────────────────────────────────────
+build/
+.gradle/
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# APK / AAB / 打包中间产物
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# 密钥与签名（绝不入库）
+*.jks
+*.keystore
+keystore.properties
+
+# 日志与临时文件
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+__pycache__/
+*.py[cod]

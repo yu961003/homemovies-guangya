@@ -289,7 +289,7 @@ class RenameOpsTest {
 
     // ---- 第十轮 C-1：composeName 清首尾 -/. 残留 ----
 
-    @Test fun `删除前缀后-.开头残留被清除`() {
+    @Test fun `删除前缀后点横开头残留被清除`() {
         val files = listOf(mockFile("[组名]-.xxx.mp4"))
         val config = BatchRenameConfig.DeleteReplace(RenameDeleteRange.SpecifiedString("[组名]"), "")
         val result = buildBatchRenameNames(files, config)

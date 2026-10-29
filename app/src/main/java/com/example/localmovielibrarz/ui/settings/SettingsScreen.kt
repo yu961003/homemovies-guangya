@@ -53,6 +53,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.AlertDialog
@@ -1861,7 +1862,7 @@ private fun DirectorySettingsPage(
         onClick = onPickLibrary,
         enabled = !uiState.isScanning && !uiState.isScraping,
         shape = AppRadius.XL,
-        colors = libraryScanButtonPalette().let { palette ->
+        colors = libraryScanButtonPalette(MaterialTheme.colorScheme).let { palette ->
             ButtonDefaults.buttonColors(
                 containerColor = palette.containerColor,
                 contentColor = palette.contentColor,
@@ -3896,12 +3897,19 @@ internal data class LibraryScanButtonPalette(
     val disabledContentColor: Color
 )
 
-@Composable
-internal fun libraryScanButtonPalette() = LibraryScanButtonPalette(
-    containerColor = MaterialTheme.colorScheme.primary,
-    contentColor = MaterialTheme.colorScheme.onPrimary,
-    disabledContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-    disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f)
+/**
+ * 库扫描按钮配色。
+ *
+ * 颜色由调用方传入当前主题（@Composable 侧传 [MaterialTheme.colorScheme]），因此本函数
+ * 是**纯函数**：JVM 单元测试可以直接校验 alpha 派生规则，不需要 Compose 运行时。
+ * 写成 @Composable 读 MaterialTheme 会让测试无法在不启动 Compose 的情况下校验这条规则
+ * ——禁用态配色曾经因此退化成「白字压浅底」，到这里才被回归测试抓住。
+ */
+internal fun libraryScanButtonPalette(scheme: ColorScheme) = LibraryScanButtonPalette(
+    containerColor = scheme.primary,
+    contentColor = scheme.onPrimary,
+    disabledContainerColor = scheme.onSurface.copy(alpha = 0.55f),
+    disabledContentColor = scheme.onSurface.copy(alpha = 0.62f)
 )
 
 @Composable

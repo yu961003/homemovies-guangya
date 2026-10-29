@@ -232,22 +232,6 @@ class GuangyaBrowserRepository(
     }
 
     /**
-     * G-1 依赖项拆分：目标名命中「任何其他待改名文件的旧名」即判为依赖项（窗口内该名的
-     * 占用状态不确定，必须走临时名中转）；命中自身旧名（等价无改名）按无依赖直改处理。
-     */
-    internal fun splitIndependentDependent(
-        renames: List<Pair<String, String>>,
-        namesById: Map<String, String>
-    ): Pair<List<Pair<String, String>>, List<Pair<String, String>>> {
-        val allOldKeys = renames.mapNotNull { (id, _) -> namesById[id]?.renameNameKey() }.toSet()
-        return renames.partition { (id, newName) ->
-            val selfKey = namesById[id]?.renameNameKey()
-            val others = allOldKeys - (selfKey ?: "")
-            newName.renameNameKey() !in others
-        }
-    }
-
-    /**
      * G-3①：重命名统一入口（Repository 层最后防线）。
      * 发送前硬 trim 首尾空格（覆盖一切上游漏 trim 的实现偏差），并打点告警日志，
      * 杜绝不可见空格以外泄到服务端（服务端文案为「文件名不能…」，与本地「名称不能…」一字之差）。
@@ -332,6 +316,26 @@ data class BatchRenameResult(
     val autoSuffixed: Int = 0, // ★ A-3：因撞名被自动加后缀的项数
     val retried: Int = 0       // ★ F-2 遗留字段：G-1 模型下恒为 0（补偿重试已移除，保留以兼容 UI 消费）
 )
+
+/**
+ * G-1 依赖项拆分：目标名命中「任何其他待改名文件的旧名」即判为依赖项（窗口内该名的
+ * 占用状态不确定，必须走临时名中转）；命中自身旧名（等价无改名）按无依赖直改处理。
+ *
+ * 与 [orderRenamesByDependency] 一样是纯函数并放在文件顶层：本函数只依赖入参与
+ * `renameNameKey`，无仓库状态，顶层可见性让回归测试可以直接调用（Kotlin 测试源集
+ * 无法访问成员函数的 internal 可见性之外的实例方法）。
+ */
+internal fun splitIndependentDependent(
+    renames: List<Pair<String, String>>,
+    namesById: Map<String, String>
+): Pair<List<Pair<String, String>>, List<Pair<String, String>>> {
+    val allOldKeys = renames.mapNotNull { (id, _) -> namesById[id]?.renameNameKey() }.toSet()
+    return renames.partition { (id, newName) ->
+        val selfKey = namesById[id]?.renameNameKey()
+        val others = allOldKeys - (selfKey ?: "")
+        newName.renameNameKey() !in others
+    }
+}
 
 /**
  * D-1：依赖拓扑排序（Kahn 贪心）——保留为纯工具函数（互换名/环检测仍有价值，且回归测试覆盖）。
