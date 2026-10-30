@@ -1,7 +1,6 @@
 package com.example.localmovielibrarz.mpv
 
 import android.content.Context
-import android.graphics.PixelFormat
 import android.util.AttributeSet
 import android.util.Log
 import android.view.SurfaceHolder
@@ -25,7 +24,11 @@ class MpvVideoView @JvmOverloads constructor(
 ) : FrameLayout(context, attrs, defStyleAttr) {
 
     private val surfaceView = SurfaceView(context).apply {
-        holder.setFormat(PixelFormat.RGBA_8888)
+        // 这里**不能**固定 setFormat(RGBA_8888)：mpv 的 Android VO 自己会调
+        // ANativeWindow_setBuffersGeometry（context_android.c），选的是能零拷贝的
+        // 私有格式；上层一旦先把格式钉成 RGBA_8888，mediacodec 直出就要多走一次
+        // 格式转换/回拷，表现为「hw+ 反而不如 sw 流畅」。
+        // 保持 SurfaceHolder 的默认格式，让 mpv 自己协商。
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
     }
 

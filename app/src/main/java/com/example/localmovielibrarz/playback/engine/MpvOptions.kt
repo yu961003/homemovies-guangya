@@ -43,6 +43,11 @@ object MpvOptions {
         add("hwdec" to hwdec)
         // exo: setVideoChangeFrameRateStrategy(OFF). mpv 侧关闭自动帧率切换以保持一致。
         add("video-sync" to "audio")
+        // 丢帧策略：默认值就是 vo（渲染来不及就丢帧，音画以音频为准）。
+        // 显式写出来是因为硬件解码 + 回拷贝在 1080p 高码率上会偶发
+        // 「解码 33ms / 上屏 50ms」的抖动，丢帧比「全部渲染但音画越走越偏」更不容易被感知。
+        // 本仓 libmpv.so 字符串表里 `framedrop` / `framedrop=no` / `hr-seek-framedrop` 均存在。
+        add("framedrop" to "vo")
         // π 校准对齐：exo 用 CLOSEST_SYNC 近似 seek，mpv 对应 hr-seek=no（关键帧 seek，快）
         add("hr-seek" to "no")
 

@@ -28,6 +28,7 @@ import com.example.localmovielibrarz.data.repository.MovieMetadataRefreshRunner
 import com.example.localmovielibrarz.data.repository.MovieScrapeTaskRunner
 import com.example.localmovielibrarz.data.repository.ScrapeTaskSummary
 import com.example.localmovielibrarz.data.repository.StrmScrapeRepository
+import com.example.localmovielibrarz.playback.engine.MpvHwdecMode
 import com.example.localmovielibrarz.playback.lut.LutParamKey
 import com.example.localmovielibrarz.playback.lut.LutParams
 import com.example.localmovielibrarz.playback.lut.LutPreset
@@ -761,6 +762,19 @@ class SettingsViewModel(
      * 不可用会显式降级回 exo 并在播放页提示，而不是在设置页把开关禁掉——
      * 设置页禁用会让「为什么没有 mpv」变得不可解释。
      */
+    /**
+     * mpv 解码默认档。
+     *
+     * 与播放页侧栏三档是同一份枚举，多出来的 AUTO 只作为「默认值」出现：
+     * 用户不必每部片手动挑，引擎会按片源特征细化。
+     */
+    fun updateMpvHwdecMode(mode: MpvHwdecMode) {
+        repository.saveMpvHwdecMode(mode)
+        _uiState.update {
+            it.copy(mpvHwdecMode = repository.getMpvHwdecMode(), savedMessage = "mpv 解码档位已切换")
+        }
+    }
+
     fun updateDefaultPlaybackEngine(isMpv: Boolean) {
         repository.saveDefaultPlaybackEngine(
             if (isMpv) AppSettingsRepository.PLAYER_ENGINE_MPV else AppSettingsRepository.PLAYER_ENGINE_EXO
@@ -1590,6 +1604,7 @@ class SettingsViewModel(
             playerSeekBackSeconds = repository.getPlayerSeekBackSeconds(),
             playerSeekForwardSeconds = repository.getPlayerSeekForwardSeconds(),
             defaultPlaybackEngineIsMpv = repository.getDefaultPlaybackEngine() == AppSettingsRepository.PLAYER_ENGINE_MPV,
+            mpvHwdecMode = repository.getMpvHwdecMode(),
             lutSettings = repository.getLutSettings(),
             externalSubtitleFontSizeSp = repository.getExternalSubtitleFontSizeSp(),
             externalSubtitleBottomPaddingPercent = repository.getExternalSubtitleBottomPaddingPercent(),
@@ -1724,6 +1739,8 @@ data class SettingsUiState(
     val playerSeekForwardSeconds: Int = AppSettingsRepository.DEFAULT_PLAYER_SEEK_SECONDS,
     /** 默认播放内核是否为 mpv；false 即 exo（默认值，也是 mpv 不可用时的回退目标）。 */
     val defaultPlaybackEngineIsMpv: Boolean = false,
+    /** mpv 解码默认档（含 AUTO）；播放页侧栏可以临时改，改完即写回这里。 */
+    val mpvHwdecMode: MpvHwdecMode = MpvHwdecMode.AUTO,
     /**
      * 实时调色（LUT）设置。
      *

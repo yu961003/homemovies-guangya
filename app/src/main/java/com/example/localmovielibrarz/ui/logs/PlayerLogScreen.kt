@@ -207,6 +207,8 @@ private fun eventLabel(event: String): String {
         event == "player.healthSnapshot" -> "健康快照"
         event == "player.monitorStarted" -> "监控启动"
         event == "player.monitor.countersNull" -> "计数器不可用"
+        event == "player.mpv.frames" -> "mpv 丢帧"
+        event == "player.mpv.hwdec" -> "mpv 解码档"
         event.contains("resolve") -> "链接解析"
         event.contains("subtitle") -> "字幕"
         else -> event.removePrefix("player.")
@@ -531,6 +533,7 @@ private fun importantKeysForEvent(event: String): List<String> {
         event == "player.isPlaying" -> listOf("isPlaying", "videoDecoder")
         event == "player.monitorStarted" -> listOf("intervalMs")
         event == "player.monitor.countersNull" -> listOf("rendererCount", "playbackState")
+        event == "player.mpv.frames" -> listOf("renderedDrops", "decoderDrops", "mistimedFrames", "activeHwdec", "hwdecMode")
         event.contains("resolve") -> listOf("elapsedMs", "source")
         else -> emptyList()
     }

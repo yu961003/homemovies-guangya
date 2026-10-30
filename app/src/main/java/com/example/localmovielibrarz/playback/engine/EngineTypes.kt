@@ -77,6 +77,16 @@ enum class MpvHwdecMode(
     val subtitle: String,
     val mpvValue: String
 ) {
+    /**
+     * 自动：按片源特征在 [HW_PLUS] / [HW] / [SW] 之间挑一档（默认档）。
+     *
+     * 判定发生在 `MPV_EVENT_FILE_LOADED` 之后（此时 `video-params/*` 才有值）：
+     * HDR / 广色域（bt.2020、pq、hlg）优先零拷贝，普通 SDR 走回拷贝，
+     * 桥接不可用时由 MpvOptions.resolveHwdecValue 降级到软解。
+     * mpvValue 给的是「装载期先用的保守值」——回拷贝一定出得起画面。
+     */
+    AUTO("auto", "自动", "按片源特征自动选档（HDR→硬件解码 +，普通→硬件解码，不支持→软解）", "mediacodec-copy"),
+
     /** 零拷贝硬解。 */
     HW_PLUS("hw_plus", "硬件解码 +", "零拷贝直出（最省电，个别机型可能花屏）", "mediacodec"),
 
@@ -87,7 +97,11 @@ enum class MpvHwdecMode(
     SW("sw", "软件解码", "CPU 解码，兼容一切片源，高码率更费电", "no");
 
     companion object {
-        fun fromId(id: String?): MpvHwdecMode = entries.firstOrNull { it.id == id } ?: HW
+        /**
+         * 缺省档从 [HW] 改成 [AUTO]：装完不改设置也能用，
+         * AUTO 在装载后仍会按片源细化，效果不低于 HW，且 HDR 能自动吃到零拷贝。
+         */
+        fun fromId(id: String?): MpvHwdecMode = entries.firstOrNull { it.id == id } ?: AUTO
     }
 }
 

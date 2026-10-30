@@ -340,7 +340,13 @@ class PlayerViewModel(
             setSeekParameters(SeekParameters.CLOSEST_SYNC)
             // P1 帧率切换策略：方法在 ExoPlayer 实例上（不是 Builder），避免渲染器切换帧率时的额外抖动。
             // media3 1.9.1 中常量已移至 androidx.media3.common.C（ExoPlayer 接口不再持有该常量，直接引用会 Unresolved）
-            setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
+            // 帧率匹配：只在「切换是无缝的」时让显示刷新率跟片源走。
+            // 29.97/23.976 的片子在 60Hz 屏上按 3:2 pulldown 出帧，肉眼就是
+            // 规律性顿一下；诊断日志里 39 次 rebuffer（每次 31ms 就恢复）与
+            // exo 侧 17.4% 丢帧都指向这个方向。
+            // ONLY_IF_SEAMLESS 不会为匹配去重新协商 HDMI 模式，插上就用、
+            // 用不上就退回 OFF 的行为，比无条件 ON 稳。
+            setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS)
             setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -1924,6 +1930,20 @@ class PlayerViewModel(
         }
         observeMpvSnapshot(engine)
         startMpvProgressSaver(engine)
+        // mpv 侧丢帧观测：exo 走 VideoDecoderCounters，mpv 只能查自己的三个计数属性，
+        // 统一折成 player.mpv.frames 事件写进诊断日志，两份内核的卡顿才有可比口径。
+        engine.frameStatsReporter = { stats ->
+            logPlaybackEvent(
+                "player.mpv.frames",
+                mapOf(
+                    "renderedDrops" to stats.renderedDrops.toString(),
+                    "decoderDrops" to stats.decoderDrops.toString(),
+                    "mistimedFrames" to stats.mistimedFrames.toString(),
+                    "activeHwdec" to stats.activeHwdec,
+                    "hwdecMode" to settingsRepository.getMpvHwdecMode().id
+                )
+            )
+        }
         engine.setSubtitleStyle(currentSubtitleStyle())
         // 实时调色：在 load 之前下发，避免起播最初几帧是未调色的原片（那几帧会被用户看见）。
         // 生成在 IO 线程、set 回主线程，与 load 并发执行不冲突——target-lut 是 vo 级选项，
@@ -1947,6 +1967,8 @@ class PlayerViewModel(
             mapOf(
                 "startPositionMs" to startPositionMs.toString(),
                 "autoPlay" to autoPlay.toString(),
+                // AUTO 档在装载后会按片源细化，这里先记用户选的档位，
+                // 实际生效值由引擎通过 player.mpv.hwdec_refined 事件补报。
                 "hwdec" to settingsRepository.getMpvHwdecMode().id
             )
         )
@@ -2535,7 +2557,7 @@ data class PlayerUiState(
     /** mpv 是否已完成首次装载（未就绪时 UI 显示加载态而不是黑屏）。 */
     val mpvReady: Boolean = false,
     /** mpv 硬件解码档位（hw+ / hw / sw）：面板选中态 + 下次建实例都用它。 */
-    val mpvHwdecMode: MpvHwdecMode = MpvHwdecMode.HW,
+    val mpvHwdecMode: MpvHwdecMode = MpvHwdecMode.AUTO,
     // ── 自动分析调参（文档 §4.1）──────────────────────────────────────────
     /** 正在截帧分析：UI 用它禁掉按钮并显示进度。 */
     val lutAutoTuneBusy: Boolean = false,

@@ -133,6 +133,7 @@ import androidx.compose.foundation.layout.sizeIn
 import com.example.localmovielibrarz.ui.MinTouchTarget
 import com.example.localmovielibrarz.ui.ContentAlphaMin
 import com.example.localmovielibrarz.ui.ContentAlphaSecondary
+import com.example.localmovielibrarz.playback.engine.MpvHwdecMode
 import com.example.localmovielibrarz.playback.lut.CubeLut
 import com.example.localmovielibrarz.playback.lut.LutParamKey
 import com.example.localmovielibrarz.playback.lut.LutParams
@@ -440,6 +441,7 @@ fun SettingsScreen(
                         onSeekBackSecondsChange = viewModel::updatePlayerSeekBackSeconds,
                         onSeekForwardSecondsChange = viewModel::updatePlayerSeekForwardSeconds,
                         onDefaultEngineChange = viewModel::updateDefaultPlaybackEngine,
+                        onMpvHwdecModeChange = viewModel::updateMpvHwdecMode,
                         onOpenSubtitle = { currentPage = SettingsPage.PlayerSubtitle },
                         onOpenProgressBar = { currentPage = SettingsPage.PlayerProgressBar },
                         onOpenColorGrade = { currentPage = SettingsPage.PlayerColorGrade }
@@ -1135,6 +1137,7 @@ private fun PlayerSettingsPage(
     onSeekBackSecondsChange: (Int) -> Unit,
     onSeekForwardSecondsChange: (Int) -> Unit,
     onDefaultEngineChange: (Boolean) -> Unit,
+    onMpvHwdecModeChange: (MpvHwdecMode) -> Unit,
     onOpenSubtitle: () -> Unit,
     onOpenProgressBar: () -> Unit,
     onOpenColorGrade: () -> Unit
@@ -1163,6 +1166,47 @@ private fun PlayerSettingsPage(
                 )
             }
             Switch(checked = uiState.defaultPlaybackEngineIsMpv, onCheckedChange = onDefaultEngineChange)
+        }
+    }
+    SettingsGroupCard(title = "解码（mpv 默认档）") {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "默认「自动」：装载后按片源特征挑档——HDR / 广色域走零拷贝，普通 SDR 走回拷贝，" +
+                    "解码器不支持时降级软解。播放页侧栏可以针对单部片临时改，改完即写回这里。",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+                style = MaterialTheme.typography.bodySmall
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                MpvHwdecMode.entries.chunked(2).forEach { pair ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        pair.forEach { mode ->
+                            val selected = mode == uiState.mpvHwdecMode
+                            OutlinedButton(
+                                onClick = { onMpvHwdecModeChange(mode) },
+                                colors = if (selected) {
+                                    ButtonDefaults.outlinedButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                    )
+                                } else {
+                                    ButtonDefaults.outlinedButtonColors()
+                                }
+                            ) {
+                                Text(if (selected) "✓ ${mode.label}" else mode.label)
+                            }
+                        }
+                    }
+                }
+            }
+            Text(
+                text = uiState.mpvHwdecMode.subtitle,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
     SettingsSectionTitle("播放控制")

@@ -65,6 +65,14 @@ class MpvPlaybackEngine(
     @Volatile
     private var activeHwdecMode: MpvHwdecMode = hwdecMode
 
+    /** mpv 丢帧观测的上一次采样值；-1 表示还没采过（首帧只记基线）。 */
+    private var lastFrameDropCount = -1
+    private var lastDecoderDropCount = -1
+    private var lastMistimedCount = -1
+
+    /** 丢帧回调（渲染丢帧 / 解码丢帧 / 时序错帧 / 当前解码器），见 [scheduleFrameStatsPoll]。 */
+    var frameStatsReporter: ((FrameStats) -> Unit)? = null
+
     /**
      * 是否已经给过「video-reload 重建视频输出」这一次自愈机会（每次装载复位）。
      *
@@ -822,8 +830,11 @@ class MpvPlaybackEngine(
                     subtitleOffsetMs = offset
                     applySubtitle(subtitle)
                 }
+                // AUTO 档要等 FILE_LOADED 之后 video-params 才有值，所以放在这里细化。
+                refineAutoHwdec()
                 // 画面到底出没出来，要等 VO 初始化之后才知道，所以延后一拍再查。
                 scheduleVideoOutputAudit()
+                scheduleFrameStatsPoll()
                 updateSnapshot { it.copy(playbackState = PlaybackSnapshot.STATE_READY) }
             }
 
@@ -835,6 +846,79 @@ class MpvPlaybackEngine(
                 Log.w(TAG, "mpv 发出 shutdown 事件")
                 updateSnapshot { it.copy(playbackState = PlaybackSnapshot.STATE_IDLE) }
             }
+        }
+    }
+
+    /**
+     * AUTO 档的按片源细化。
+     *
+     * 只在用户选了 [MpvHwdecMode.AUTO] 时动作，手动选了三档里的任何一档都不干预
+     * （否则会出现「我明明选了软解，它自己变回硬解」）。
+     *
+     * 判定依据是 mpv 的 `video-params/*`：primaries 命中 bt.2020（HDR10 / DV 的常见色域）
+     * 或 gamma 命中 pq / hlg 时，说明片源是 HDR，零拷贝直出更省电且能吃到 HDR 通路；
+     * 其余一律走回拷贝，兼容性优先。桥接不可用时 MpvOptions.resolveHwdecValue
+     * 会把 mediacodec* 降成 no，这里不需要重复判断。
+     */
+    private fun refineAutoHwdec() {
+        if (activeHwdecMode != MpvHwdecMode.AUTO) return
+        val primaries = MPVLib.getString("video-params/primaries").orEmpty()
+        val gamma = MPVLib.getString("video-params/gamma").orEmpty()
+        val isHdr = primaries.contains("bt.2020", ignoreCase = true) ||
+            gamma.contains("pq", ignoreCase = true) ||
+            gamma.contains("hlg", ignoreCase = true)
+        val target = if (isHdr) MpvHwdecMode.HW_PLUS else MpvHwdecMode.HW
+        val value = MpvOptions.resolveHwdecValue(target)
+        val ret = MPVLib.setString("hwdec", value)
+        if (ret < 0) {
+            Log.w(TAG, "AUTO 细化 hwdec=$value 失败: $ret（保持装载值）")
+            return
+        }
+        Log.i(TAG, "AUTO 按片源细化：primaries=$primaries gamma=$gamma → ${target.label}（hwdec=$value）")
+    }
+
+    /**
+     * mpv 侧的丢帧观测。
+     *
+     * exo 那条链路读的是 `VideoDecoderCounters`（PlayerViewModel.startDropFrameMonitor），
+     * mpv 没有那个对象，所以真机上 mpv 的卡顿一直没有数据。这里直接查 mpv 自己的
+     * 三个计数属性（libmpv.so 字符串表里均存在）：
+     * - `frame-drop-count`：渲染层丢帧（VO 来不及显示）
+     * - `decoder-frame-drop-count`：解码层丢帧
+     * - `mistimed-frame-count`：时序不对的帧（帧率匹配问题的直接指标）
+     *
+     * 计数变化时才上报，避免刷屏。
+     */
+    private fun scheduleFrameStatsPoll() {
+        mainHandler.removeCallbacks(frameStatsPoll)
+        mainHandler.postDelayed(frameStatsPoll, FRAME_STATS_INTERVAL_MS)
+    }
+
+    private val frameStatsPoll = object : Runnable {
+        override fun run() {
+            if (released || !created) return
+            val rendered = MPVLib.getInt("frame-drop-count")
+            val decoded = MPVLib.getInt("decoder-frame-drop-count")
+            val mistimed = MPVLib.getInt("mistimed-frame-count")
+            if (rendered >= 0 && decoded >= 0 && mistimed >= 0) {
+                val changed = rendered != lastFrameDropCount ||
+                    decoded != lastDecoderDropCount ||
+                    mistimed != lastMistimedCount
+                if (changed) {
+                    lastFrameDropCount = rendered
+                    lastDecoderDropCount = decoded
+                    lastMistimedCount = mistimed
+                    frameStatsReporter?.invoke(
+                        FrameStats(
+                            renderedDrops = rendered,
+                            decoderDrops = decoded,
+                            mistimedFrames = mistimed,
+                            activeHwdec = MPVLib.getString("hwdec-current").orEmpty()
+                        )
+                    )
+                }
+            }
+            mainHandler.postDelayed(this, FRAME_STATS_INTERVAL_MS)
         }
     }
 
@@ -1297,8 +1381,19 @@ class MpvPlaybackEngine(
         return BitmapFactory.decodeFile(file.absolutePath, opts)
     }
 
+    /** mpv 侧一帧统计快照，见 [scheduleFrameStatsPoll]。 */
+    data class FrameStats(
+        val renderedDrops: Int,
+        val decoderDrops: Int,
+        val mistimedFrames: Int,
+        val activeHwdec: String
+    )
+
     companion object {
         private const val TAG = "MpvPlaybackEngine"
+
+        /** mpv 丢帧采样间隔：5 秒与 exo 侧 DROP_FRAME_MONITOR_INTERVAL_MS 对齐。 */
+        private const val FRAME_STATS_INTERVAL_MS = 5_000L
 
         /** 等渲染面的重试间隔：约一帧。SurfaceView 通常 1~3 帧内就绪。 */
         private const val SURFACE_WAIT_RETRY_MS = 16L
