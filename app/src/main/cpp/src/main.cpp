@@ -19,6 +19,7 @@
 
 // render.cpp：把已缓存的 Surface 重放成本句柄的 wid（见该文件里的注释）。
 int apply_cached_surface_to_current_handle();
+void invalidate_surface_handle();
 
 #define ARRAYLEN(a) (sizeof(a) / sizeof(a[0]))
 
@@ -140,6 +141,9 @@ static void destroy_mpv_locked()
 
     mpv_terminate_destroy(g_mpv);
     g_mpv = nullptr;
+    // 句柄没了，surface 的归属记录也跟着失效：mpv_create() 常复用同一块地址，
+    // 留着旧指针会让 hasSurface() 对新句柄误判为「已挂载」。
+    invalidate_surface_handle();
 }
 
 jni_func(jboolean, isAvailable) {

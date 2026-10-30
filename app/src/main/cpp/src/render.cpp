@@ -18,6 +18,11 @@ jni_func(jint, ensureSurface);
 // 供 main.cpp 在 mpv_initialize() 之后重放：本文件对外的 C++ 入口（不走 JNI）。
 int apply_cached_surface_to_current_handle();
 
+// 供 main.cpp 在销毁句柄时调用：作废 surface 的归属记录。
+// 必须清掉——mpv_create() 很可能复用刚释放的地址，若 g_surface_handle 还留着旧值，
+// hasSurface() 的「句柄相同」判据就会对**新**句柄误判为已挂载，wid 却没写过。
+void invalidate_surface_handle();
+
 /**
  * 双播放器架构下 surface 的生命周期比播放内核长：
  * Compose 重组、Activity 旋转、引擎切换都会重挂 surface，而 mpv 实例可能被复用。
@@ -128,6 +133,13 @@ jni_func(jint, ensureSurface) {
 // main.cpp 在 mpv_initialize() 之后调用：initialize 之前的 set_property 不落地。
 int apply_cached_surface_to_current_handle() {
     return apply_wid_locked();
+}
+
+// 句柄即将/已经销毁：只清归属，不清 g_surface。
+// surface 本身还活着（SurfaceView 没销毁），下一次 create + init 会由
+// apply_cached_surface_to_current_handle() 重新写进新句柄的 wid。
+void invalidate_surface_handle() {
+    g_surface_handle = nullptr;
 }
 
 jni_func(jint, detachSurface) {
