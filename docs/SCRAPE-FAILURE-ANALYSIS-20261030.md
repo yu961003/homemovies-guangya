@@ -122,7 +122,7 @@
 | # | 改动 | 文件 | 预期效果 |
 |---|---|---|---|
 | 1 | DMM2 抛异常时**带上 cause**，并把文案改成含「请求失败」 | `scraper/Dmm2Scraper.kt:125` | 分类从 `Unknown/0s` 变成 `Network/15s`；重试生效；同一部片不再无冷却重打 |
-| 2 | 分类器优先看**结构化 `reason`**，不靠文案猜 | `scraper/ScrapeFailure.kt` `classifyKind` 头部 | 改一个字就翻档的脆弱性消失 |
+| 2 | 文案判据都失配时，用异常自带的**结构化档位**兜底（只升 `Unknown`，不覆盖既有有意判定） | `scraper/ScrapeFailure.kt` `structuredKind()` + `classifyKind` 末支 | 改一个字就翻档的脆弱性消失 |
 | 3 | 刮削 client 加 **`callTimeout`**（建议 45s） | `StrmScrapeRepository.kt:104-114` | 单源上限从 170s 压到 45s，预算不再被一家吃光 |
 | 4 | 加**IPv4 优先 + 过滤 `2001::/32`** 的 `Dns` | 新增 `scraper/PollutionSafeDns.kt`，挂到 client | 绕开污染投出的 Teredo 黑洞地址 |
 | 5 | 给 `s1` 补**实测过的模板**：`/search/list?keyword={code_compact}` + `/works/detail/{code_compact}` | `scraper/OfficialMakerCatalog.kt` s1 条目 | 官网档对 S1 从「必然 ParseError」变成「真能取到」 |
@@ -151,7 +151,10 @@
 
 1. **用户手机的 DNS 是否为污染源** —— 本次取证在本机代理线路完成，与用户手机不是同一网络实例。验证手段：在手机上 `nslookup s1s1s1.com`（或抓 mihomo 日志看重写后的 IP），若返回 `2001::/32` 即可确认。（**Assumed**）
 2. **mihomo / jp 节点是否对该域做了 fake-ip 或 DNS 重写** —— 若节点侧已正确解析，则 P0-4 在用户环境里可能不生效。验证：`curl -v https://s1s1s1.com/` 看实际连接 IP。
-3. **S1 补模板后能否命中真实元数据** —— 本机实测 `SNIS225` 的详情页 75918 B 有完整 `<title>`，但字段抽取（`OfficialPageExtractor`）对 S1 的 Next.js 结构是否适配**尚未端到端验证**。验证：用 `SNIS225` 跑一次完整刮削，看 NFO 是否落盘。
+3. **S1 补模板后能否命中真实元数据** —— 已推进两步：
+   - 实测确认 S1 详情页**没有任何机器可读块**（ld+json / `__NEXT_DATA__` / `application/json` / `og:title` 全为 0，`og:image` 是 CDN logo），Generic 档只能拿到 `<title>`；
+   - 因此补了 `OfficialExtractionProfile.WorkPageTable` 与对应抽取层，并在**同一份 75918 B 页面**上做本地复刻：标题、121 字剧情、`2014年9月7日`、`TAKE-D`、`星野ナミ`、5 个 `ジャンル`、`DVD 120分`（→ `2:00:00`）全部命中；`メーカー`/`レーベル` 该页没有，按既有兜底回退 `site.studio`。
+   **仍未验证**：这条抽取层在真机（OkHttp 实际响应、字符集、Challenge 判据）上是否一致。验证：用 `SNIS225` 跑一次完整刮削，看 NFO 是否落盘。
 4. **其余 11 家官网的模板** —— 全部留空，本次只补 S1。验证：按同法实测各家搜索入口后再补。
 5. **样本依赖度说明** —— 本次结论建立在 **1 个番号 × 2 次运行** 上。「站点没有」这一条在四个独立源上交叉验证过，可信度高；「占比」数字是按本次日志的墙钟分布估的，**换番号会变**，不能当普适常量。
 
@@ -165,3 +168,6 @@
 - `data/repository/StrmScrapeRepository.kt` — client 挂 `callTimeout` + 新 DNS
 - `scraper/OfficialMakerCatalog.kt` — s1 条目补实测模板
 - `scraper/OfficialMakerScraper.kt` — 按 source 过滤 catalog
+- `scraper/OfficialMakerCatalog.kt` — 新增 `OfficialExtractionProfile.WorkPageTable`，s1 条目改用该档
+- `scraper/OfficialPageExtractor.kt` — 新增 `workPageRaw` 层（`h2.p-workPage__title` / `p.p-workPage__text` / `div.th` 资料栏）
+
