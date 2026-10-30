@@ -14,6 +14,12 @@
 > （回环代理 + CA 包）是否解决你那条 https 直链，需要用本包在设备上复验，见
 > `docs/LIBMPV-TLS-CA-FIX-20261029.md` §5.3 的 logcat 判读表。
 
+> 🖼️ **mpv 黑屏已修**（2026-10-30）：根因是 `loadfile` 抢在 `wid` 之前下发，android VO 初始化时读到
+> `WinID=0` 直接 `Missing surface pointer` 失败 → 只剩声音、画面全黑（进度/时长正常）。现在装载前会等
+> 渲染面就绪，并有 `vo-configured` + mpv 日志双判据的自检把原因写进错误条。同一提交还把内核切换按钮
+> 收进顶栏（`MPV | EXO` 小药丸，不再挡字幕按钮），并补上 **hw+ / hw / sw** 三档硬解（播放模式 → 解码（MPV））。
+> 详见 `docs/MPV-BLACKSCREEN-HWDEC-20261030.md`。
+
 > 📦 **包名变更**：`com.example.localmovielibrary` → **`com.example.localmovielibrarz`**（全部 Kotlin package/import、namespace、applicationId、目录结构均已同步，含 test 目录）。
 
 ## 1. 改动清单
