@@ -37,7 +37,7 @@
 |---|---|---|---|---|---|
 | 1 | **DMM2** | `类型=Unknown，可重试=true，冷却=0s`；同一部片在桃链与 legacy 各打一次 | `scraper/Dmm2Scraper.kt:125`（`throw RuntimeException("DMM2 GraphQL 请求连续失败：…")` 无 cause）<br>`scraper/ScrapeFailure.kt:207`（type-walk 含 `EOFException`）<br>`scraper/ScrapeFailure.kt:248`（`else -> Unknown`）<br>`scraper/ScrapeFailure.kt:63`（`Unknown(retryable=true, cooldown=0L)`） | 异常丢 cause → 分类落 Unknown → 冷却 0 → 无冷却重打且不重试 | **代码缺陷** |
 | 2 | **TheJavDB** | `TheJavDB request failed HTTP 404: https://api.thejavdb.net/v1/movies?q=SNIS-205` | `scraper/JavdbScraper.kt:45`（单一 `API_URL`）、`:23`（`?q=`）、`:37`（非 2xx 直接 error） | 站内确实没有该番号；端点本身活着 | **站点没有** |
-| 3 | **AVBase** | 三次失败（`:20` `:22` `:26`，间隔 2s/4s 与退避表吻合）；`EOFException` / `Connection reset`；冷却 15s | `scraper/AvbaseScraper.kt:38`（单次 `execute()`，无 try/catch）<br>`scraper/ScrapeFailure.kt:206-212`（`IO異常 → Network`） | 传输层抖动，非反爬（带 Referer 实测 200） | **网络** |
+| 3 | **AVBase** | 三次失败（`:20` `:22` `:26`，间隔 2s/4s 与退避表吻合）；`EOFException` / `Connection reset`；冷却 15s | `scraper/AvbaseScraper.kt:38`（单次 `execute()`，无 try/catch）<br>`scraper/ScrapeFailure.kt:206-212`（`IOException → Network`） | 传输层抖动，非反爬（带 Referer 实测 200） | **网络** |
 | 4 | **JAVten** | `这个番号认不出 FC2 商品号` | `scraper/JavtenScraper.kt:36-43`（`Fc2Parser.videoId` 为空即抛 NotFound）<br>`scraper/Fc2Parser.kt:33`（文案常量） | 该源只服务 FC2 商品号，对 `SNIS-205` 构造上无路可走；**legacy 链对它不做裁剪**（`ScrapeRouteRules.kt:216-217` 有码档 `emptySet()`） | **源没接好** |
 | 5 | **Official（官网档）** | 08:50:41 / 08:51:43 / 08:52:47 三次连接超时，目标 `2001::76b8:4e4e`；单源吃掉 90s | `scraper/OfficialScraper.kt:19-21`（`/search/list?keyword=` 路径）<br>`StrmScrapeRepository.kt:1611`（`SCRAPE_TIMEOUT_SECONDS = 30L`）<br>`StrmScrapeRepository.kt:104-114`（client 无 `callTimeout`、无 DNS 策略） | DNS 污染投出不可路由 IPv6 + 重试放大 | **网络** |
 | 6 | **FALENO 官网** | 08:52:49 → 08:53:51（62s）后 `首页取不到（超时），无法发现搜索入口` | `scraper/OfficialSiteScraper.kt:179`（`PageOutcome.Failed` 分支）<br>`OfficialMakerCatalog.kt` 的 `s1` 条目（`detailUrlTemplate=""`、`searchUrlTemplate=""`） | 空模板 → 回首页发现表单；首页超时 | **网络 + 源没接好** |
@@ -163,11 +163,10 @@
 ## 附：本次改动清单（见同批提交）
 
 - `scraper/Dmm2Scraper.kt` — 异常带 cause + 文案含「请求失败」
-- `scraper/ScrapeFailure.kt` — 分类器优先读结构化 reason
+- `scraper/ScrapeFailure.kt` — 文案判据都失配时用结构化档位兜底（`structuredKind()` 只替换 `else` 分支）
 - `scraper/PollutionSafeDns.kt` — 新增：IPv4 优先 + 过滤 `2001::/32`
 - `data/repository/StrmScrapeRepository.kt` — client 挂 `callTimeout` + 新 DNS
-- `scraper/OfficialMakerCatalog.kt` — s1 条目补实测模板
+- `scraper/OfficialMakerCatalog.kt` — s1 条目补实测模板；新增 `OfficialExtractionProfile.WorkPageTable` 并让 s1 改用该档
 - `scraper/OfficialMakerScraper.kt` — 按 source 过滤 catalog
-- `scraper/OfficialMakerCatalog.kt` — 新增 `OfficialExtractionProfile.WorkPageTable`，s1 条目改用该档
 - `scraper/OfficialPageExtractor.kt` — 新增 `workPageRaw` 层（`h2.p-workPage__title` / `p.p-workPage__text` / `div.th` 资料栏）
 
