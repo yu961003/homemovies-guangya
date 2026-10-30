@@ -520,8 +520,16 @@ private fun LogEntryItem(entry: LogEntry, onCopy: () -> Unit) {
 
 private fun importantKeysForEvent(event: String): List<String> {
     return when {
-        event == "player.dropFrames" -> listOf("droppedFrames", "skippedOutputBuffers", "dropRate", "deltaDropped", "deltaSkipped", "bufferedMs", "rebufferCount")
-        event == "player.decoderOverload" -> listOf("dropRate", "deltaDropped", "deltaSkipped", "deltaRendered", "bufferedAheadMs", "videoDecoder", "videoCodec", "hint")
+        event == "player.dropFrames" -> listOf(
+            "droppedFrames", "skippedOutputBuffers", "renderedOutputBuffers",
+            "renderLossRate", "absoluteLossRate", "dropRate",
+            "deltaDropped", "deltaSkipped", "deltaRendered",
+            "bufferedMs", "rebufferCount"
+        )
+        event == "player.decoderOverload" -> listOf(
+            "renderLossRate", "dropRate", "deltaDropped", "deltaSkipped", "deltaRendered",
+            "bufferedAheadMs", "videoDecoder", "videoCodec", "hint"
+        )
         event == "player.renderStall" -> listOf("renderedOutputBuffers", "droppedFrames", "skippedOutputBuffers", "bufferedMs", "videoDecoder")
         event == "player.rebuffer.start" -> listOf("rebufferCount", "timeSinceReadyMs", "positionMs")
         event == "player.rebuffer.recovered" -> listOf("recoveryMs", "rebufferTotalMs", "positionMs")
@@ -533,7 +541,10 @@ private fun importantKeysForEvent(event: String): List<String> {
         event == "player.isPlaying" -> listOf("isPlaying", "videoDecoder")
         event == "player.monitorStarted" -> listOf("intervalMs")
         event == "player.monitor.countersNull" -> listOf("rendererCount", "playbackState")
-        event == "player.mpv.frames" -> listOf("renderedDrops", "decoderDrops", "mistimedFrames", "activeHwdec", "hwdecMode")
+        event == "player.mpv.frames" -> listOf(
+            "readable", "renderedDrops", "decoderDrops", "mistimedFrames",
+            "activeHwdec", "voConfigured", "currentVo", "estimatedFps", "displayFps", "hwdecMode"
+        )
         event.contains("resolve") -> listOf("elapsedMs", "source")
         else -> emptyList()
     }
