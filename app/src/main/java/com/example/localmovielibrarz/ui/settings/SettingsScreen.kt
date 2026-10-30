@@ -109,6 +109,7 @@ import com.example.localmovielibrarz.data.local.CloudVideoTaskEntity
 import com.example.localmovielibrarz.data.local.CloudVideoTaskStatus
 import com.example.localmovielibrarz.data.repository.AppSettingsRepository
 import com.example.localmovielibrarz.data.repository.DailyUsageStats
+import com.example.localmovielibrarz.data.repository.Top250BadgeSize
 import com.example.localmovielibrarz.data.repository.Top250State
 import com.example.localmovielibrarz.data.repository.UsageStatsRepository
 import com.example.localmovielibrarz.scraper.CustomJsonScrapeConfig
@@ -127,6 +128,7 @@ import com.example.localmovielibrarz.ui.shared.folderBatchAggregateProgress
 import com.example.localmovielibrarz.ui.shared.folderBatchProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -1637,21 +1639,54 @@ private fun TopRankingSettingsPage() {
     val scope = rememberCoroutineScope()
 
     val state by repository.state.collectAsStateWithLifecycle()
-    var badgeEnabled by remember { mutableStateOf(settingsRepository.isCardTopGoldBadgeEnabled()) }
+    var badgeSize by remember { mutableStateOf(settingsRepository.cardTopGoldBadgeSize()) }
     var endpoint by remember { mutableStateOf(settingsRepository.top250Endpoint()) }
     var message by remember { mutableStateOf<String?>(null) }
     var refreshing by remember { mutableStateOf(false) }
+    // 「本地影片命中 N 条」：命中数依赖影片列表，而设置页本身不持有影片库，
+    // 所以这里按需取一次首页同源的列表算完就丢，不缓存也不订阅（榜单一天一更，
+    // 为它常驻一个数据库观察者不值）。state 变化时重算，刷新后能立刻看到新数字。
+    var matchedSummary by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    LaunchedEffect(state) {
+        if (state is Top250State.Ready) {
+            val movies = app.container.movieRepository.observeMovies().first()
+            matchedSummary = repository.matchedCount(movies) to movies.size
+        }
+    }
 
     SettingsGroupCard(title = "卡片标识") {
-        SettingsSwitchRow(
-            title = "显示 TOP 名次角标",
-            subtitle = "命中榜单的影片在卡片左上角显示名次，关闭后完全不显示",
-            checked = badgeEnabled,
-            onCheckedChange = {
-                badgeEnabled = it
-                settingsRepository.saveCardTopGoldBadgeEnabled(it)
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "角标尺寸",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            // 三档而不是开关：密集网格里「有但更小」是真实诉求，开关表达不了；
+            // 第三档「不显示」同时覆盖原来关闭开关的语义，因此不再需要第二个控件。
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                Top250BadgeSize.entries.forEachIndexed { index, size ->
+                    SegmentedButton(
+                        selected = badgeSize == size,
+                        onClick = {
+                            badgeSize = size
+                            settingsRepository.saveCardTopGoldBadgeSize(size)
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = Top250BadgeSize.entries.size
+                        )
+                    ) { Text(size.label()) }
+                }
             }
-        )
+            Text(
+                text = "角标显示在影片卡片左上角（右上角是收藏与多选）。选「不显示」时任意位置都不再出现名次。",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
     }
 
     SettingsGroupCard(title = "榜单数据") {
@@ -1677,6 +1712,18 @@ private fun TopRankingSettingsPage() {
                     style = MaterialTheme.typography.bodySmall
                 )
             }
+            // 完整度提示：答的是「开了角标为什么有些片子没有」——那类影片不在榜单里。
+            matchedSummary?.let { (matched, total) ->
+                Text(
+                    text = if (total > 0) {
+                        "番号匹配：本地 $total 部影片中 $matched 部命中榜单，其余不显示角标"
+                    } else {
+                        "本地影片库为空，扫库后这里会显示命中比例"
+                    },
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             Button(
                 onClick = {
                     if (refreshing) return@Button
@@ -1686,9 +1733,12 @@ private fun TopRankingSettingsPage() {
                         val result = repository.refresh()
                         refreshing = false
                         message = if (result.success) {
-                            // 命中数需要影片列表，设置页不持有影片库，这里只报榜单条数，
-                            // 避免把「榜单 250 条」误写成「库内命中 250 条」。
-                            "刷新完成：榜单共 ${result.total} 条，已写入本地缓存"
+                            // 刷新后立刻用同一份影片列表重算命中数，避免用户看到
+                            // 「榜单已更新」但下方完整度还是旧数字。
+                            val movies = app.container.movieRepository.observeMovies().first()
+                            val matched = repository.matchedCount(movies)
+                            matchedSummary = matched to movies.size
+                            "刷新完成：榜单共 ${result.total} 条，本地 ${movies.size} 部影片中 $matched 部命中"
                         } else {
                             "刷新失败：${result.error ?: "未知错误"}"
                         }
@@ -1757,6 +1807,106 @@ private fun TopRankingSettingsPage() {
             )
         }
     }
+}
+
+/**
+ * JavDB 抓取口径：端点地址 + 海报偏好。
+ *
+ * 自包含（直接读 app.container.settingsRepository），不往 SettingsUiState 里加字段：
+ * 这两项只被刮削器消费，改完由取值函数在下一次刮削时现读，不需要重组整个设置快照。
+ */
+@Composable
+private fun JavdbScrapeSettingsCard() {
+    val context = LocalContext.current
+    val settingsRepository = (context.applicationContext as LocalMovieLibraryApp).container.settingsRepository
+    var apiUrl by remember { mutableStateOf(settingsRepository.javdbApiUrl()) }
+    var unwatermarked by remember { mutableStateOf(settingsRepository.isJavdbUnwatermarkedImageEnabled()) }
+    var savedHint by remember { mutableStateOf<String?>(null) }
+
+    SettingsGroupCard(title = "JavDB 接口") {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedTextField(
+                value = apiUrl,
+                onValueChange = {
+                    apiUrl = it
+                    savedHint = null
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                shape = AppRadius.LG,
+                label = { Text("接口地址") }
+            )
+            Text(
+                text = "镜像站换域名时在这里改，留空或非 http(s) 地址会回落内置地址。",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+                style = MaterialTheme.typography.bodySmall
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Button(
+                    onClick = {
+                        settingsRepository.saveJavdbApiUrl(apiUrl)
+                        // 保存后立刻回读：用户填了非法地址时，这里显示的是真正会生效的
+                        // 那个值，而不是他刚敲进去的字符串。
+                        apiUrl = settingsRepository.javdbApiUrl()
+                        savedHint = "已保存，下次刮削生效"
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = AppRadius.LG
+                ) {
+                    Text("保存地址")
+                }
+                OutlinedButton(
+                    onClick = {
+                        apiUrl = AppSettingsRepository.DEFAULT_JAVDB_API_URL
+                        settingsRepository.saveJavdbApiUrl(apiUrl)
+                        savedHint = "已恢复内置地址"
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = AppRadius.LG
+                ) {
+                    Text("恢复默认")
+                }
+            }
+            savedHint?.let {
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+
+    SettingsGroupCard(title = "海报") {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            SettingsSwitchRow(
+                title = "优先无水印大图",
+                subtitle = "开启：海报优先取原始大图（通常无水印），取不到再回落站方封面。" +
+                    "关闭：沿用站方封面。已刮削过的影片不会自动换图，重新刮削才生效。",
+                checked = unwatermarked,
+                onCheckedChange = {
+                    unwatermarked = it
+                    settingsRepository.saveJavdbUnwatermarkedImageEnabled(it)
+                }
+            )
+        }
+    }
+}
+
+/** 三档角标的显示名。放在 UI 层：data 层的枚举只表达档位，不带用户可见文案。 */
+private fun Top250BadgeSize.label(): String = when (this) {
+    Top250BadgeSize.Large -> "大"
+    Top250BadgeSize.Small -> "小"
+    Top250BadgeSize.None -> "不显示"
 }
 
 @Composable
@@ -2498,6 +2648,11 @@ private fun ScrapeSettingsPage(
         onMoveUp = onMovePrioritySourceUp,
         onMoveDown = onMovePrioritySourceDown
     )
+    // JavDB 端点与海报口径：两项都通过 AppSettingsRepository 的取值函数被刮削器
+    // 每次调用现取，改完立刻生效（不需要重启）。放在「默认刮削」之后、「自定义 JSON
+    // 刮削」之前——它属于内置源的口径调整，不参与来源优先级排序。
+    SettingsSectionTitle("JavDB 抓取")
+    JavdbScrapeSettingsCard()
     SettingsSectionTitle("自定义 JSON 刮削")
     CustomJsonScrapeEntryCard(
         config = uiState.customJsonScrapeConfig,

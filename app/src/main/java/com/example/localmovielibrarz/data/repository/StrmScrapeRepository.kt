@@ -135,7 +135,14 @@ class StrmScrapeRepository(
     private val officialScraper: OfficialScraper = OfficialScraper(client = httpClient, ioDispatcher = ioDispatcher),
     private val mgstageScraper: MgstageScraper = MgstageScraper(client = httpClient, ioDispatcher = ioDispatcher),
     private val javbusScraper: JavbusScraper = JavbusScraper(client = httpClient, ioDispatcher = ioDispatcher),
-    private val javdbScraper: JavdbScraper = JavdbScraper(client = httpClient, ioDispatcher = ioDispatcher),
+    private val javdbScraper: JavdbScraper = JavdbScraper(
+        client = httpClient,
+        ioDispatcher = ioDispatcher,
+        // 端点与海报口径都是设置项：用取值函数延迟到每次刮削再读，
+        // 否则用户在设置页改完地址必须重启 App 才生效。
+        apiUrlProvider = settingsRepository::javdbApiUrl,
+        preferUnwatermarkedCover = settingsRepository::isJavdbUnwatermarkedImageEnabled
+    ),
     private val r18DevScraper: R18DevScraper = R18DevScraper(client = httpClient, ioDispatcher = ioDispatcher),
     // peach 主链的三家新源。放在这里而不是等到用到时才 new：它们与既有八家共用同一个
     // httpClient（同一套代理与超时）和 ioDispatcher，另建一份只会多出一份连接池与线程池。

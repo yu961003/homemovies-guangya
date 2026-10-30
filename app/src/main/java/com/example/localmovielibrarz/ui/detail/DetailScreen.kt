@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -90,8 +91,9 @@ import com.example.localmovielibrarz.scraper.ActorAvatarStore
 import com.example.localmovielibrarz.scraper.ScrapeEventLevel
 import com.example.localmovielibrarz.scraper.ScrapeTaskReport
 import com.example.localmovielibrarz.scraper.ScrapeTaskStatus
-import com.example.localmovielibrarz.ui.shared.LocalTop250BadgeEnabled
+import com.example.localmovielibrarz.ui.shared.LocalTop250BadgeSize
 import com.example.localmovielibrarz.ui.shared.LocalTop250RankOf
+import com.example.localmovielibrarz.ui.shared.Top250ArtworkBadge
 import com.example.localmovielibrarz.ui.shared.Top250RankBadge
 import com.example.localmovielibrarz.ui.shared.UriImage
 import com.example.localmovielibrarz.ui.shared.artworkCacheRevision
@@ -578,9 +580,10 @@ private fun MobileTitleBlock(movie: MovieEntity, onGenreClick: (String) -> Unit)
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // 榜单名次：命中 JavDB TOP 榜单时在标题上方补一枚角标，
         // 与影片卡片的左上角角标同源（LocalTop250RankOf），开关也共享同一个设置项。
-        val top250BadgeEnabled = LocalTop250BadgeEnabled.current
+        // 详情页不跟随卡片的三档尺寸：标题区空间充足，固定用详情页尺寸更稳。
+        val top250BadgeSize = LocalTop250BadgeSize.current
         val top250Rank = LocalTop250RankOf.current(movie)
-        if (top250BadgeEnabled && top250Rank != null) {
+        if (top250BadgeSize.isVisible && top250Rank != null) {
             Top250RankBadge(rank = top250Rank)
         }
         Text(
@@ -1074,6 +1077,9 @@ private fun SimilarSection(movies: List<MovieEntity>, onMovieClick: (Long) -> Un
                     title = movie.title,
                     subtitle = movie.year?.toString().orEmpty(),
                     cacheKey = movie.artworkCacheRevision(),
+                    // 相似影片同样可能命中榜单：复用卡片的角标叠层，
+                    // 尺寸/开关跟着设置页走，不在详情页另立口径。
+                    badge = { Top250ArtworkBadge(movie) },
                     onClick = { onMovieClick(movie.id) }
                 )
             }
@@ -1087,6 +1093,7 @@ private fun SmallPosterCard(
     title: String,
     subtitle: String,
     cacheKey: Any? = null,
+    badge: (@Composable BoxScope.() -> Unit)? = null,
     onClick: (() -> Unit)? = null
 ) {
     Column(
@@ -1113,6 +1120,7 @@ private fun SmallPosterCard(
             if (imageUri == null) {
                 Icon(Icons.Rounded.Movie, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.76f))
             }
+            badge?.invoke(this)
         }
         Text(title, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (subtitle.isNotBlank()) {

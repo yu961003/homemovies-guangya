@@ -14,15 +14,27 @@ import com.example.localmovielibrarz.util.TextSanitizer
 
 class JavdbScraper(
     private val client: OkHttpClient = OkHttpClient(),
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /**
+     * 端点与海报口径都做成取值函数而不是构造期常量：刮削器由 AppContainer 以单例
+     * 持有，用户在设置页改完地址/开关后不可能为了生效去重建整条依赖图，
+     * 所以每次刮削现取一次设置（SharedPreferences 读是内存操作，成本可忽略）。
+     */
+    private val apiUrlProvider: () -> String = { API_URL },
+    private val preferUnwatermarkedCover: () -> Boolean = { false }
 ) : MovieScraper {
     override val source: ScrapeSource = ScrapeSource.TheJavDB
 
     override suspend fun scrape(number: String): ScrapedMovieInfo = withContext(ioDispatcher) {
         val normalized = normalizeJavdbNumber(number)
-        val url = "$API_URL?q=${URLEncoder.encode(normalized, "UTF-8")}"
+        val endpoint = apiUrlProvider().trim().ifBlank { API_URL }
+        val url = "$endpoint?q=${URLEncoder.encode(normalized, "UTF-8")}"
         val root = fetchJson(url)
-        parseJavdbMovieInfo(normalized, extractJavdbMovieObject(root).toJavdbApiMovie())
+        parseJavdbMovieInfo(
+            requestedNumber = normalized,
+            movie = extractJavdbMovieObject(root).toJavdbApiMovie(),
+            preferFullCover = preferUnwatermarkedCover()
+        )
     }
 
     private fun fetchJson(url: String): Any {
@@ -64,7 +76,19 @@ internal data class JavdbApiMovie(
     val genres: List<String> = emptyList()
 )
 
-internal fun parseJavdbMovieInfo(requestedNumber: String, movie: JavdbApiMovie): ScrapedMovieInfo {
+internal fun parseJavdbMovieInfo(
+    requestedNumber: String,
+    movie: JavdbApiMovie,
+    /**
+     * 海报优先取无水印大图。
+     *
+     * `frontcover_url` 是站方竖版封面（带角标水印），`fullcover_url` 是原始大图
+     * （通常无水印，但比例多为横版）。开启后优先 fullcover、拿不到再回落 frontcover；
+     * 关闭时保持原行为（frontcover 优先）。不做 URL 改写——接口没有给出可推导的
+     * 水印参数规则，凭空拼接只会得到 404。
+     */
+    preferFullCover: Boolean = false
+): ScrapedMovieInfo {
     val number = movie.universalId.cleanText()
         .ifBlank { normalizeJavdbNumber(requestedNumber) }
     val title = movie.title.cleanText().ifBlank { number }
@@ -73,7 +97,11 @@ internal fun parseJavdbMovieInfo(requestedNumber: String, movie: JavdbApiMovie):
     val duration = movie.duration.cleanText().digitsOnly()
     val fullCoverUrl = movie.fullCoverUrl.cleanText()
     val frontCoverUrl = movie.frontCoverUrl.cleanText()
-    val posterUrl = frontCoverUrl.ifBlank { fullCoverUrl }
+    val posterUrl = if (preferFullCover) {
+        fullCoverUrl.ifBlank { frontCoverUrl }
+    } else {
+        frontCoverUrl.ifBlank { fullCoverUrl }
+    }
     val thumbUrl = fullCoverUrl.ifBlank { posterUrl }
     val genres = movie.genres.cleanStringList()
 

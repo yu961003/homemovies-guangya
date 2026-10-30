@@ -772,28 +772,77 @@ class AppSettingsRepository(context: Context) {
         prefs.edit().putString(KEY_TOP250_ENDPOINT, endpoint.trim()).apply()
     }
 
-    /** 卡片 TOP 角标开关，默认开启：榜单是纯增量信息，不挡视线就该默认可见。 */
-    fun isCardTopGoldBadgeEnabled(): Boolean =
-        prefs.getBoolean(KEY_CARD_TOP_GOLD_BADGE_ENABLED, true)
+    /**
+     * 卡片 TOP 角标尺寸（对应 5.0.5 的 BADGE_ICON_LARGE / SMALL / NONE 三档）。
+     *
+     * 为什么用三档而不是一个布尔开关：5.0.5 里徽章尺寸是独立于显示与否的第二维度，
+     * 用户在密集网格里想「有但更小」，布尔开关满足不了。三档同时覆盖了「不显示」，
+     * 所以旧的布尔键 `card_top_gold_badge_enabled` 退化成迁移来源，不再单独读写。
+     */
+    fun cardTopGoldBadgeSize(): Top250BadgeSize {
+        val stored = prefs.getString(KEY_CARD_TOP_GOLD_BADGE_SIZE, null)
+        if (stored != null) return Top250BadgeSize.fromStored(stored)
+        // 旧布尔键迁移：曾经关掉过的用户不该升级后被重新点亮。
+        val legacyEnabled = prefs.getBoolean(KEY_CARD_TOP_GOLD_BADGE_ENABLED, true)
+        val migrated = if (legacyEnabled) Top250BadgeSize.Small else Top250BadgeSize.None
+        prefs.edit().putString(KEY_CARD_TOP_GOLD_BADGE_SIZE, migrated.stored).apply()
+        return migrated
+    }
 
-    fun saveCardTopGoldBadgeEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_CARD_TOP_GOLD_BADGE_ENABLED, enabled).apply()
+    fun saveCardTopGoldBadgeSize(size: Top250BadgeSize) {
+        prefs.edit().putString(KEY_CARD_TOP_GOLD_BADGE_SIZE, size.stored).apply()
     }
 
     /**
-     * 角标开关的响应式读法。
+     * 角标尺寸的响应式读法。
      *
      * 卡片角标在首页组合树的最外层决定是否参与布局，用 Flow 而不是
      * 「设置页返回时重读」：返回键路径有多个（系统返回、手势返回、
      * 底部导航切页），逐个挂重读点必然漏掉其中一条。
      */
-    fun observeCardTopGoldBadgeEnabled(): Flow<Boolean> = callbackFlow {
-        trySend(isCardTopGoldBadgeEnabled())
+    fun observeCardTopGoldBadgeSize(): Flow<Top250BadgeSize> = callbackFlow {
+        trySend(cardTopGoldBadgeSize())
         val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == KEY_CARD_TOP_GOLD_BADGE_ENABLED) trySend(isCardTopGoldBadgeEnabled())
+            if (key == KEY_CARD_TOP_GOLD_BADGE_SIZE || key == KEY_CARD_TOP_GOLD_BADGE_ENABLED) {
+                trySend(cardTopGoldBadgeSize())
+            }
         }
         prefs.registerOnSharedPreferenceChangeListener(listener)
         awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
+    /**
+     * TheJavDB 抓取端点（对应 4.0.0 的 `javdb_api_url`）。
+     *
+     * 与 [top250Endpoint] 同口径：镜像会换域名，写死端点意味着一次迁移就全挂，
+     * 所以读的时候做一次 http(s) 兜底，允许用户填错但不允许功能整体失效。
+     */
+    fun javdbApiUrl(): String {
+        val saved = prefs.getString(KEY_JAVDB_API_URL, null)?.trim().orEmpty()
+        return if (saved.startsWith("http://") || saved.startsWith("https://")) {
+            saved
+        } else {
+            DEFAULT_JAVDB_API_URL
+        }
+    }
+
+    fun saveJavdbApiUrl(url: String) {
+        prefs.edit().putString(KEY_JAVDB_API_URL, url.trim()).apply()
+    }
+
+    /**
+     * 海报使用无水印大图（对应 4.0.0 的 `javdb_unwatermarked_image_enabled`）。
+     *
+     * 语义说明：接口同时给 `frontcover_url`（竖版小封面，站方带角标水印）和
+     * `fullcover_url`（原始大图，通常不带水印）。开启后海报优先取 fullcover，
+     * 拿不到再回落 frontcover —— 这是从「有无水印」这个开关名能确定的最小语义，
+     * 没有臆造 URL 改写规则。
+     */
+    fun isJavdbUnwatermarkedImageEnabled(): Boolean =
+        prefs.getBoolean(KEY_JAVDB_UNWATERMARKED_IMAGE_ENABLED, false)
+
+    fun saveJavdbUnwatermarkedImageEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_JAVDB_UNWATERMARKED_IMAGE_ENABLED, enabled).apply()
     }
 
     fun getCloudExcludedVideoNames(): Set<String> =
@@ -1390,11 +1439,28 @@ class AppSettingsRepository(context: Context) {
          */
         const val KEY_TOP250_ENDPOINT = "top250_endpoint"
 
-        /** 影片卡片左上角的 TOP 榜角标开关（对应 5.0.5 的 card_top_gold_badge_enabled）。 */
+        /**
+         * 影片卡片左上角的 TOP 榜角标尺寸（对应 5.0.5 的 BADGE_ICON_LARGE / SMALL / NONE）。
+         *
+         * 旧的布尔键 [KEY_CARD_TOP_GOLD_BADGE_ENABLED] 保留，只作为升级迁移来源：
+         * 新键一旦写入，旧键就不再参与读取，避免两个真值源互相覆盖。
+         */
+        const val KEY_CARD_TOP_GOLD_BADGE_SIZE = "card_top_gold_badge_size"
+
+        /** 旧布尔角标开关（迁移来源，见 [KEY_CARD_TOP_GOLD_BADGE_SIZE]）。 */
         const val KEY_CARD_TOP_GOLD_BADGE_ENABLED = "card_top_gold_badge_enabled"
+
+        /** TheJavDB 抓取端点（对应 4.0.0 的 `javdb_api_url`）。 */
+        const val KEY_JAVDB_API_URL = "javdb_api_url"
+
+        /** 海报优先取无水印大图（对应 4.0.0 的 `javdb_unwatermarked_image_enabled`）。 */
+        const val KEY_JAVDB_UNWATERMARKED_IMAGE_ENABLED = "javdb_unwatermarked_image_enabled"
 
         /** 榜单默认端点：5.0.5 实际使用的 `top250/` 子路径。 */
         const val DEFAULT_TOP250_ENDPOINT = "https://catembylegacy.fastcdn.dpdns.org/top250/"
+
+        /** 抓取默认端点：与 [JavdbScraper] 里的常量保持一致。 */
+        const val DEFAULT_JAVDB_API_URL = "https://api.thejavdb.net/v1/movies"
         const val PLAYER_ENGINE_EXO = "exo"
         const val PLAYER_ENGINE_MPV = "mpv"
         const val KEY_HOME_IMAGE_MODE = "home_image_mode"

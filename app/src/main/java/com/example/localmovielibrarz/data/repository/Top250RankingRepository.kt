@@ -43,6 +43,29 @@ data class Top250CardRank(
 )
 
 /**
+ * 卡片角标尺寸（对应 5.0.5 的 `BADGE_ICON_LARGE / SMALL / NONE` 三档）。
+ *
+ * 放在 data 层而不是 ui 层：它是**持久化的用户设置**，读写方是
+ * [AppSettingsRepository]，UI 只是消费方。放进 ui 层会让 data 反向依赖 ui。
+ * [stored] 是落盘的字符串值，改名前后的旧值靠 [fromStored] 归一，
+ * 未知值一律回落到 [Small]（宁可显示小角标，也不要因为脏数据整块消失）。
+ */
+enum class Top250BadgeSize(val stored: String) {
+    Large("large"),
+    Small("small"),
+    None("none");
+
+    val isVisible: Boolean get() = this != None
+
+    companion object {
+        fun fromStored(value: String?): Top250BadgeSize {
+            val normalized = value?.trim()?.lowercase().orEmpty()
+            return entries.firstOrNull { it.stored == normalized } ?: Small
+        }
+    }
+}
+
+/**
  * 榜单缓存的完整度。
  *
  * 5.0.5 的 TOP 榜单在影片库里按需匹配，命中率取决于本地影片与榜单的交集，

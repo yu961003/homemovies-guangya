@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.localmovielibrarz.LocalMovieLibraryApp
 import com.example.localmovielibrarz.data.local.MovieEntity
+import com.example.localmovielibrarz.data.repository.Top250BadgeSize
 import com.example.localmovielibrarz.data.repository.Top250Rank
 import com.example.localmovielibrarz.data.repository.Top250State
 import com.example.localmovielibrarz.ui.AppRadius
@@ -124,13 +125,19 @@ fun Top250RankBadge(rank: Top250Rank?, modifier: Modifier = Modifier) {
  */
 @Composable
 fun BoxScope.Top250ArtworkBadge(movie: MovieEntity) {
-    if (!LocalTop250BadgeEnabled.current) return
+    val size = LocalTop250BadgeSize.current
+    if (!size.isVisible) return
     val rank = LocalTop250RankOf.current(movie) ?: return
+    // 三档只差字号与内边距：Large 用于宽松网格（卡片更宽），Small 用于密集场景。
+    val large = size == Top250BadgeSize.Large
     Top250Badge(
         rank = rank.rank,
         modifier = Modifier
             .align(Alignment.TopStart)
-            .padding(6.dp)
+            .padding(if (large) 7.dp else 5.dp),
+        fontSize = if (large) 12.sp else 9.sp,
+        horizontalPadding = if (large) 7 else 4,
+        verticalPadding = if (large) 3 else 1
     )
 }
 
@@ -141,10 +148,14 @@ fun BoxScope.Top250ArtworkBadge(movie: MovieEntity) {
  * 影片卡片出现的位置有首页网格、横向轮播、搜索结果、筛选项结果等多处，
  * 每处都改签名会把「榜单」这一个横切能力扩散成十几处改动；而它本身
  * 只影响卡片左上角的一个小角标，属于典型的局部环境信息。
+ *
+ * 尺寸只有 [LocalTop250BadgeSize] 一个真值源：早前先有的「开关」布尔
+ * 现在退化成 `size.isVisible`，不再单独下发，避免两个 CompositionLocal
+ * 需要同步（同步漏一处就会出现「设置关了但某页还画」）。
  */
 
-/** 关闭时所有卡片都不显示角标；读取方不必自己判断设置项。 */
-val LocalTop250BadgeEnabled = staticCompositionLocalOf { false }
+/** 角标尺寸；[Top250BadgeSize.None] 表示所有位置都不显示。 */
+val LocalTop250BadgeSize = staticCompositionLocalOf { Top250BadgeSize.Small }
 
 /** 影片 → 榜单名次；未加载或未命中都返回 null。 */
 val LocalTop250RankOf = staticCompositionLocalOf<(MovieEntity) -> Top250Rank?> { { null } }
@@ -168,8 +179,8 @@ fun Top250BadgeProvider(content: @Composable () -> Unit) {
     }
     val repository = container.top250RankingRepository
     val settingsRepository = container.settingsRepository
-    val enabled by settingsRepository.observeCardTopGoldBadgeEnabled()
-        .collectAsState(initial = settingsRepository.isCardTopGoldBadgeEnabled())
+    val badgeSize by settingsRepository.observeCardTopGoldBadgeSize()
+        .collectAsState(initial = settingsRepository.cardTopGoldBadgeSize())
     val badgeState by repository.state.collectAsState()
     LaunchedEffect(repository) {
         if (repository.state.value is Top250State.Idle) repository.loadFromCache()
@@ -182,7 +193,7 @@ fun Top250BadgeProvider(content: @Composable () -> Unit) {
         { _ -> null }
     }
     CompositionLocalProvider(
-        LocalTop250BadgeEnabled provides enabled,
+        LocalTop250BadgeSize provides badgeSize,
         LocalTop250RankOf provides rankOf,
         content = content
     )
