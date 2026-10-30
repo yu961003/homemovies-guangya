@@ -33,6 +33,7 @@ object MpvOptions {
         hwdec: String,
         cacheDir: File,
         caFilePath: String?,
+        targetLutPath: String? = null,
     ): List<Pair<String, String>> = buildList {
         // ── 渲染 ───────────────────────────────────────────────────────────────
         // exo: PlayerView 默认 SurfaceView 输出。mpv 对应 vo=gpu-next + android context。
@@ -161,6 +162,23 @@ object MpvOptions {
         // 而 Android 上没有 yt-dlp 可执行文件——多这一层只会白白探测一次再回落。
         // 改道回环代理后 URL 变成 http://127.0.0.1:…，同样会被它匹配，所以必须显式关。
         add("ytdl" to "no")
+        // 实时调色（3D LUT）。
+        //
+        // 必须在 mpv_initialize() 之前以 --target-lut 下发，运行期再改是另一条路径：
+        // `target-lut` 由 vo_gpu_next 注册，改它要重建渲染管线；而 mvp 的 VO 在
+        // loadfile 时就初始化完了。应用侧 applyLut 是「异步落盘 + post 到主线程」，
+        // loadfile 几乎总是先到 —— VO 起来时没有 LUT，之后补设也不会重新渲染，
+        // 于是表现为「开了调色和没开一样」。这里由引擎在 init 前同步生成好文件传进来。
+        if (!targetLutPath.isNullOrBlank()) {
+            add("target-lut" to targetLutPath)
+        }
+
+        // 截帧（自动分析调参的输入）。默认走 vo 的 FBO 路径，而 hwdec=mediacodec* 的
+        // 零拷贝帧上 `Failed creating target FBO for screenshot!` 是已知失败（随包
+        // libmpv.so 里就有这条串）；`screenshot-sw=yes` 改成软件转换后再编码，慢一点点
+        // 但任何 hwdec 档位都能出图 —— 自动调参「永远抓不到画面」的直接解法。
+        add("screenshot-sw" to "yes")
+
         // 结束行为：不自动播放下一个（exo 侧也是单条 mediaItem）
         add("idle" to "yes")
     }

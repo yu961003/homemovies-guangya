@@ -545,18 +545,23 @@ class StrmScrapeRepository(
             logStore.append("刮削链模式为「${chainMode.label}」，跳过桃链直接走原有刮削链")
             return scrapeLegacyChain(requestedSource, number, fileName)
         }
-        val peachOutcome = runCatching { scrapePeachChain(number, fileName) }
+        // 桃链真的发出过请求的来源。降级到 legacy 链时要把这批剔掉：两条链的
+        // routeFor/routeForPeach 会产出几乎相同的来源顺序，不剔的话同一家在一次刮削里
+        // 会被打两轮（每轮还有 3 次重试），单源单号最多 6 个请求。用户看到的
+        // 「失败了的又重复获取」就是这里。
+        val visitedSources = mutableSetOf<ScrapeSource>()
+        val peachOutcome = runCatching { scrapePeachChain(number, fileName, visitedSources) }
         return when (val result = peachOutcome.getOrNull()) {
             is PeachChainResult.Success -> result.info.copy(
                 number = rewriteNumberPrefix(number, settingsRepository.getNumberPrefixRewriteRules())
             )
             is PeachChainResult.NoResult -> {
                 logStore.append("桃链未拿到可用元数据（${result.reason}），降级到原有刮削链兜底")
-                scrapeLegacyChain(requestedSource, number, fileName)
+                scrapeLegacyChain(requestedSource, number, fileName, visitedSources)
             }
             is PeachChainResult.Unavailable -> {
                 logStore.append("桃链不可用（${result.reason}），降级到原有刮削链兜底")
-                scrapeLegacyChain(requestedSource, number, fileName)
+                scrapeLegacyChain(requestedSource, number, fileName, visitedSources)
             }
             null -> {
                 // runCatching 会连 CancellationException 一起吞掉，必须原样抛回去：
@@ -566,7 +571,7 @@ class StrmScrapeRepository(
                 logStore.append(
                     "桃链异常（${thrown?.message ?: thrown?.let { it::class.java.simpleName } ?: "未知"}），降级到原有刮削链兜底"
                 )
-                scrapeLegacyChain(requestedSource, number, fileName)
+                scrapeLegacyChain(requestedSource, number, fileName, visitedSources)
             }
         }
     }
@@ -582,7 +587,11 @@ class StrmScrapeRepository(
      * - 负缓存是类字段（[scrapeMissCache]）共享的——它的全部价值就是「同一部片在一次批量里
      *   被重试时别再问一遍」，每次新建等于把它关掉了。
      */
-    private suspend fun scrapePeachChain(number: String, fileName: String): PeachChainResult {
+    private suspend fun scrapePeachChain(
+        number: String,
+        fileName: String,
+        visitedSources: MutableSet<ScrapeSource> = mutableSetOf()
+    ): PeachChainResult {
         val routeType = ScrapeRouteRules.classify(number, fileName)
         val plan = ScrapeRouteRules.routeForPeach(routeType, scrapeSourcesFor(ScrapeSource.Priority, number))
         if (routeType != ScrapeContentType.Unknown) {
@@ -598,7 +607,7 @@ class StrmScrapeRepository(
             )
         }
         val chain = PeachScrapeChain(
-            executor = RepositoryPeachSourceExecutor(),
+            executor = RepositoryPeachSourceExecutor(visitedSources = visitedSources),
             missCache = scrapeMissCache,
             budget = ScrapeBudget()
         )
@@ -612,7 +621,9 @@ class StrmScrapeRepository(
      * [sourceHealthTracker] 这些私有成员；如果把这些搬出去，legacy 链就得跟着改，
      * 而 legacy 链的历史行为正是这次要保住的东西。
      */
-    private inner class RepositoryPeachSourceExecutor : PeachSourceExecutor {
+    private inner class RepositoryPeachSourceExecutor(
+        private val visitedSources: MutableSet<ScrapeSource> = mutableSetOf()
+    ) : PeachSourceExecutor {
 
         override fun cooldownRemaining(source: ScrapeSource): Long =
             sourceHealthTracker.cooldownRemaining(source)
@@ -629,6 +640,8 @@ class StrmScrapeRepository(
                     requestAttempted = false
                 )
             }
+            // 到这一步才是「真的会发请求」，配置性跳过（上面那条 return）不算。
+            visitedSources += source
             val attempt = fetchSingleSource(
                 source = source,
                 number = number,
@@ -656,7 +669,8 @@ class StrmScrapeRepository(
     private suspend fun scrapeLegacyChain(
         requestedSource: ScrapeSource,
         number: String,
-        fileName: String
+        fileName: String,
+        skipSources: Set<ScrapeSource> = emptySet()
     ): ScrapedMovieInfo {
         val prefixRewriteRules = settingsRepository.getNumberPrefixRewriteRules()
         val outputNumber = rewriteNumberPrefix(number, prefixRewriteRules)
@@ -676,7 +690,7 @@ class StrmScrapeRepository(
         }
         // 自动链走「按类型裁剪 + 按取信层级重排」；用户点名某个来源时两套都不走，
         // 直接把那一家交下去——他点的就是那一家，替他排序等于改他的意思。
-        val plan = if (isAutoChain) {
+        var plan = if (isAutoChain) {
             ScrapeRouteRules.routeFor(routeType, scrapeSourcesFor(requestedSource, number))
         } else {
             ScrapeRouteRules.RoutePlan(
@@ -690,6 +704,22 @@ class StrmScrapeRepository(
                 "番号形态识别为 ${routeType.label}，来源按该类型裁剪并分层：" +
                     plan.sources.joinToString("→") { "${it.label}(${ScrapeAuthority.tierOf(it).label})" }
             )
+        }
+        // 桃链已经问过、并且明确没问出结果的来源，这里不再重复请求。
+        // 只剔「桃链真的发过请求」的：它已经按单源重试打过一轮，重复只会拉长耗时、
+        // 并且把同一个失败再记一次账（冷却/负缓存都会更乱）。
+        if (skipSources.isNotEmpty()) {
+            val before = plan.sources
+            val kept = before.filterNot { it in skipSources }
+            if (kept.isNotEmpty() && kept.size != before.size) {
+                logStore.append(
+                    "已跳过桃链问过的 ${before.size - kept.size} 个来源，不再重复请求：" +
+                        before.filter { it in skipSources }.joinToString("、") { it.label }
+                )
+                plan = plan.copy(sources = kept)
+            } else if (kept.isEmpty()) {
+                logStore.append("桃链已问遍全部 ${before.size} 个来源，legacy 链没有可重复尝试的站，按原顺序再兜一次")
+            }
         }
         if (plan.skipped.isNotEmpty()) {
             logStore.append(

@@ -122,17 +122,35 @@ class OfficialSiteScraper(
         // 直接跳过等于让 Faleno/Dahlia/MakerSite 三个来源永远 ParseError。所以这里补一条
         // **有据可查**的通道——回一次首页，读站点自己的搜索表单，拿它的 action 与参数名。
         // 这不是猜路径（见 OfficialSearchForm），发现结果按 site.id 缓存在进程内。
-        val discovered = discoverSearchPrefix(site)
-        if (discovered.isNotEmpty()) {
-            val url = discovered + encode(code)
-            log("[${source.label}/${site.label}] 目录没有模板，用首页搜索表单发现的入口取页 $url")
-            return searchThenExtract(url, site, code)
+        return when (val discovered = discoverSearchPrefix(site)) {
+            is PrefixDiscovery.Found -> {
+                val url = discovered.prefix + encode(code)
+                log("[${source.label}/${site.label}] 目录没有模板，用首页搜索表单发现的入口取页 $url")
+                searchThenExtract(url, site, code)
+            }
+            is PrefixDiscovery.Unavailable -> {
+                // ★ 2026-10-30 修正：原来这里不管是「网络挂了」还是「这站真的没有表单」，
+                // 都落成 ParseError「这家片商没有配置取数模板」。真机日志里
+                // `[片商官网/ATTACKERS] 首页取不到（网络或传输故障）` 随即被记成
+                // ParseError 并冷却 300 秒 —— 实际上 attackers.net 从代理侧 2 秒就能
+                // 打开，同一个站点下一部片本来能成功，却因为「档位错了」被压住。
+                // 现在把真实的失败档（Network / Timeout / CloudflareChallenge …）原样传上去。
+                log(
+                    "[${source.label}/${site.label}] 首页取不到（${discovered.reason.label}），" +
+                        "无法发现搜索入口：${discovered.detail}"
+                )
+                PeachParseResult.Failed(
+                    discovered.reason,
+                    "官方站首页取不到：${discovered.reason.label}（${discovered.detail}）"
+                )
+            }
+            is PrefixDiscovery.NotFound -> {
+                log("[${source.label}/${site.label}] 没有配置取数模板，首页也没有可用的搜索表单，跳过")
+                // 用 ParseError 而不是 NotFound：这不是「站上没有这部片」，而是「我们还没有取数入口」。
+                // NotFound 会让链上把它当成「官网确实没有」从而安心换源，问题就永远不会被发现。
+                PeachParseResult.Failed(PeachFailureReason.ParseError, "这家片商没有配置取数模板")
+            }
         }
-
-        log("[${source.label}/${site.label}] 没有配置取数模板，首页也没有可用的搜索表单，跳过")
-        // 用 ParseError 而不是 NotFound：这不是「站上没有这部片」，而是「我们还没有取数入口」。
-        // NotFound 会让链上把它当成「官网确实没有」从而安心换源，问题就永远不会被发现。
-        return PeachParseResult.Failed(PeachFailureReason.ParseError, "这家片商没有配置取数模板")
     }
 
     /**
@@ -172,19 +190,25 @@ class OfficialSiteScraper(
      */
     private val searchPrefixCache = HashMap<String, String>()
 
-    private suspend fun discoverSearchPrefix(site: OfficialMakerSite): String {
-        searchPrefixCache[site.id]?.let { return it }
+    private suspend fun discoverSearchPrefix(site: OfficialMakerSite): PrefixDiscovery {
+        searchPrefixCache[site.id]?.let { cached ->
+            // 缓存里只有「发现出的前缀」或空串（= 确认没有表单）；抓取失败从来没被缓存。
+            return if (cached.isEmpty()) PrefixDiscovery.NotFound else PrefixDiscovery.Found(cached)
+        }
         val page = when (val outcome = fetchPage(site.homeUrl, site)) {
             is PageOutcome.Failed -> {
-                log("[${source.label}/${site.label}] 首页取不到（${outcome.reason.label}），无法发现搜索入口")
                 // 取不到首页不写缓存：这多半是网络或拦截，下一部片可能就好了。
-                return ""
+                // 同时把真实失败档带出去，让上层按 Network/Timeout 处置而不是 ParseError。
+                return PrefixDiscovery.Unavailable(
+                    reason = outcome.reason,
+                    detail = outcome.detail.ifBlank { outcome.reason.label }
+                )
             }
             is PageOutcome.Page -> outcome
         }
         val prefix = OfficialSearchForm.discoverSearchPrefix(page.body, page.finalUrl).orEmpty()
         searchPrefixCache[site.id] = prefix
-        return prefix
+        return if (prefix.isEmpty()) PrefixDiscovery.NotFound else PrefixDiscovery.Found(prefix)
     }
 
     /** 番号放进查询串：只保留字母数字与连字符，其余百分号编码。 */
@@ -334,6 +358,22 @@ class OfficialSiteScraper(
     // ── 内部类型 ────────────────────────────────────────────────────────────
 
     /** 一次取页的两种结果；`Failed` 已经带上是哪一档，编排层不用再判。 */
+    /**
+     * 首页搜索入口的发现结果。
+     *
+     * 分三种而不是「空串 / 非空串」，是因为调用方对**失败原因**敏感：
+     * - [Found]：拿到了可用的搜索前缀，后面拼番号即可；
+     * - [NotFound]：首页正常取到、但确实没有 GET 搜索表单 —— 这是站点能力问题，
+     *   被记成 ParseError 是合理的（我们的目录也没配模板）；
+     * - [Unavailable]：首页根本没取到 —— 这是网络/拦截，必须按真实档位（Network /
+     *   Timeout / CloudflareChallenge）上报，否则会被误判成「这家片商配错了」而冷却。
+     */
+    private sealed interface PrefixDiscovery {
+        data class Found(val prefix: String) : PrefixDiscovery
+        data object NotFound : PrefixDiscovery
+        data class Unavailable(val reason: PeachFailureReason, val detail: String) : PrefixDiscovery
+    }
+
     private sealed interface PageOutcome {
         data class Page(val finalUrl: String, val body: String, val status: Int, val viaBrowser: Boolean) : PageOutcome
         data class Failed(

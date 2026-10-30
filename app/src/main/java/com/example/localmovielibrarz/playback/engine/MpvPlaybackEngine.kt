@@ -65,6 +65,12 @@ class MpvPlaybackEngine(
     @Volatile
     private var activeHwdecMode: MpvHwdecMode = hwdecMode
 
+    /** 丢帧属性连续读不到的次数；够 3 次才认为「这条属性在本次播放里不可用」。 */
+    private var frameStatsPollsSinceUnreadable = 0
+
+    /** 「丢帧属性不可用」只上报一次，避免每 5 秒一条同样的事件。 */
+    private var frameStatsUnavailableReported = false
+
     /** mpv 丢帧观测的上一次采样值；-1 表示还没采过（首帧只记基线）。 */
     private var lastFrameDropCount = -1
     private var lastDecoderDropCount = -1
@@ -159,10 +165,41 @@ class MpvPlaybackEngine(
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
+     * 在 `mpv_initialize()` 之前把 LUT 文件准备好，返回要写进 `--target-lut` 的路径。
+     *
+     * 为什么必须在 init 之前：`target-lut` 由 vo_gpu_next 注册，运行期 set_property
+     * 只有在 VO 已经建好后才会重建渲染管线；而 [PlayerViewModel] 里的 applyLut 是
+     * 「异步落盘 + 主线程 post」，loadfile 几乎总是先到 —— VO 初始化时没有 LUT，
+     * 之后再设也不会重新渲染。这就是「开了实时调色，画面一点变化都没有」的机制。
+     *
+     * 33³ 立方体生成在毫秒级，主线程同步做一次可以接受；失败只记日志、不阻塞起播。
+     * 成功时把签名写进 [lastLutSignature]，避免紧接着的 applyLut 重复下发。
+     */
+    private fun prepareInitialLut(settings: LutSettings?): String? {
+        if (settings == null) return null
+        if (!settings.shouldApply) {
+            // 明确关闭：签名置为「禁用」，startMpvSession 里那次 applyLut 就会早退。
+            lastLutSignature = DISABLED_LUT_SIGNATURE
+            return null
+        }
+        val file = runCatching { lutWriter.materialize(settings) }
+            .onFailure { Log.w(TAG, "预生成 LUT 文件失败", it) }
+            .getOrNull()
+        if (file == null) {
+            Log.w(TAG, "LUT 预生成没有产出文件：本次以无调色启动")
+            return null
+        }
+        lastLutSignature = settings.signature()
+        val path = file.absolutePath.replace('\\', '/')
+        Log.i(TAG, "启动前下发 LUT：${file.name}（${file.length()} 字节）")
+        return path
+    }
+
+    /**
      * 创建并初始化 mpv 实例。必须在主线程调用。
      * @return null 表示成功，否则返回面向用户的错误文案。
      */
-    fun initialize(): String? {
+    fun initialize(initialLutSettings: LutSettings? = null): String? {
         if (released) return "mpv 引擎已释放"
         if (created) return null
 
@@ -202,11 +239,15 @@ class MpvPlaybackEngine(
             )
         }
 
+        // 调色（LUT）要在 init 之前就变成 --target-lut，理由见 prepareInitialLut()。
+        val initialLutPath = prepareInitialLut(initialLutSettings)
+
         // 所有 --option 必须在 mpv_initialize() 之前设置，否则被静默忽略。
-        MpvOptions.build(context, hwdec, cacheDir, caFilePath).forEach { (key, value) ->
-            val ret = MPVLib.setOption(key, value)
-            if (ret < 0) Log.w(TAG, "设置 mpv 选项 $key=$value 失败: $ret")
-        }
+        MpvOptions.build(context, hwdec, cacheDir, caFilePath, initialLutPath)
+            .forEach { (key, value) ->
+                val ret = MPVLib.setOption(key, value)
+                if (ret < 0) Log.w(TAG, "设置 mpv 选项 $key=$value 失败: $ret")
+            }
 
         val initRet = MPVLib.initialize()
         if (initRet != 0) {
@@ -223,6 +264,7 @@ class MpvPlaybackEngine(
         Log.i(
             TAG,
             "mpv 引擎就绪，hwdec=$hwdec，CA=${caFilePath ?: "(none)"}，" +
+                "LUT=${initialLutPath?.substringAfterLast('/') ?: "(none)"}，" +
                 "回环代理=${if (proxyPort > 0) "127.0.0.1:$proxyPort" else "未启用"}"
         )
         return null
@@ -925,10 +967,22 @@ class MpvPlaybackEngine(
      * - `decoder-frame-drop-count`：解码层丢帧
      * - `mistimed-frame-count`：时序不对的帧（帧率匹配问题的直接指标）
      *
-     * 计数变化时才上报，避免刷屏。
+     * ★ 2026-10-30 修正：原来是「三值都 >=0 **且**发生变化」才上报。真机日志里 mpv 连播
+     * 39 秒一条 `player.mpv.frames` 都没有 —— 这个守卫把两种完全不同的情况都吞掉了：
+     * ① `frame-drop-count` 等属性读不到（返回 null -> -1）；② 真的没丢帧（三值恒 0，
+     * `changed` 永远 false）。两种情况下都拿不到任何信息。
+     *
+     * 现在三段式：
+     * - 首采样一律上报（哪怕三值都是 0）；
+     * - 之后只在**数值变化**时上报（避免 5 秒一条刷屏）；
+     * - 读不到属性时**只报一次**「不可用」，同时带上 `vo-configured` / `current-vo` /
+     *   `estimated-vf-fps` / `display-fps`：下一轮就能判断是 VO 没建起来（黑屏），
+     *   还是解码在跑但没出帧（hwdec 路径异常）。
      */
     private fun scheduleFrameStatsPoll() {
         mainHandler.removeCallbacks(frameStatsPoll)
+        frameStatsPollsSinceUnreadable = 0
+        frameStatsUnavailableReported = false
         mainHandler.postDelayed(frameStatsPoll, FRAME_STATS_INTERVAL_MS)
     }
 
@@ -940,11 +994,19 @@ class MpvPlaybackEngine(
             val rendered = MPVLib.getInt("frame-drop-count") ?: -1
             val decoded = MPVLib.getInt("decoder-frame-drop-count") ?: -1
             val mistimed = MPVLib.getInt("mistimed-frame-count") ?: -1
-            if (rendered >= 0 && decoded >= 0 && mistimed >= 0) {
+            val readable = rendered >= 0 && decoded >= 0 && mistimed >= 0
+            val activeHwdec = MPVLib.getString("hwdec-current").orEmpty()
+            val voConfigured = MPVLib.getBoolean("vo-configured")
+            val currentVo = MPVLib.getString("current-vo").orEmpty()
+            val estimatedFps = MPVLib.getDouble("estimated-vf-fps") ?: -1.0
+            val displayFps = MPVLib.getDouble("display-fps") ?: -1.0
+            if (readable) {
+                frameStatsPollsSinceUnreadable = 0
+                val first = lastFrameDropCount < 0
                 val changed = rendered != lastFrameDropCount ||
                     decoded != lastDecoderDropCount ||
                     mistimed != lastMistimedCount
-                if (changed) {
+                if (first || changed) {
                     lastFrameDropCount = rendered
                     lastDecoderDropCount = decoded
                     lastMistimedCount = mistimed
@@ -953,7 +1015,31 @@ class MpvPlaybackEngine(
                             renderedDrops = rendered,
                             decoderDrops = decoded,
                             mistimedFrames = mistimed,
-                            activeHwdec = MPVLib.getString("hwdec-current").orEmpty()
+                            activeHwdec = activeHwdec,
+                            readable = true,
+                            voConfigured = voConfigured,
+                            currentVo = currentVo,
+                            estimatedFps = estimatedFps,
+                            displayFps = displayFps
+                        )
+                    )
+                }
+            } else {
+                frameStatsPollsSinceUnreadable++
+                // 前两次读不到很可能只是刚 FILE_LOADED、VO 还没配好，别急着下结论。
+                if (!frameStatsUnavailableReported && frameStatsPollsSinceUnreadable >= 3) {
+                    frameStatsUnavailableReported = true
+                    frameStatsReporter?.invoke(
+                        FrameStats(
+                            renderedDrops = -1,
+                            decoderDrops = -1,
+                            mistimedFrames = -1,
+                            activeHwdec = activeHwdec,
+                            readable = false,
+                            voConfigured = voConfigured,
+                            currentVo = currentVo,
+                            estimatedFps = estimatedFps,
+                            displayFps = displayFps
                         )
                     )
                 }
@@ -1341,13 +1427,11 @@ class MpvPlaybackEngine(
         maxSide: Int = CAPTURE_MAX_SIDE
     ): Bitmap? {
         if (!created || released) {
-            Log.w(TAG, "截帧失败：引擎未就绪")
-            return null
+            return captureFailed("引擎未就绪（mpv 实例没有创建）")
         }
         val dir = File(cacheDir, CAPTURE_DIR_NAME)
         if (!dir.exists() && !dir.mkdirs()) {
-            Log.w(TAG, "截帧失败：无法创建目录 ${dir.absolutePath}")
-            return null
+            return captureFailed("无法创建截帧目录 ${dir.absolutePath}")
         }
         val file = File(dir, "frame-${System.nanoTime()}.png")
         // mpv 按 POSIX 路径解析，正斜杠是唯一安全写法（同 target-lut 的处理）。
@@ -1361,17 +1445,41 @@ class MpvPlaybackEngine(
 
         try {
             if (!awaitFile(file, timeoutMs)) {
-                Log.w(TAG, "截帧超时（${timeoutMs}ms）：mpv 未产出 ${file.name}")
-                return null
+                // 超时最常见的原因是截图命令本身失败（FBO / 软转失败 / 无视频输出），
+                // 具体原因只在 mpv 自己的日志里，必须一起带出来，否则用户只看到
+                // 「抓不到画面」，排查无门。
+                return captureFailed("等 ${timeoutMs}ms 也没产出截图文件（${file.name}）")
             }
             val bitmap = decodeScaled(file, maxSide)
-            if (bitmap == null) Log.w(TAG, "截帧失败：无法解码 ${file.name}（${file.length()} 字节）")
+            if (bitmap == null) {
+                return captureFailed("截图文件无法解码（${file.name}，${file.length()} 字节）")
+            }
+            lastCaptureFailure = null
             return bitmap
         } finally {
             // 分析只需要像素，文件用完即删：截图帧不小，攒在 cacheDir 里没人清。
             if (file.exists() && !file.delete()) Log.d(TAG, "截图临时文件未能删除：${file.name}")
         }
     }
+
+    /**
+     * 截帧失败时给用户看的一句话，含 mpv 日志尾部。
+     *
+     * 「自动调参提示抓不到画面」在真机上无法自证原因：可能是引擎没就绪、目录建不了、
+     * 截图命令被 mpv 内部拒绝（FBO / 软转 / 没有视频输出）、或者超时。把 mpv 最近几行
+     * 日志拼进来，用户一贴出来就能定位；同时留一份给 UI 读。
+     */
+    private fun captureFailed(reason: String): Bitmap? {
+        val detail = reason + describeMpvLogTail()
+        lastCaptureFailure = detail
+        Log.w(TAG, "截帧失败：$detail")
+        return null
+    }
+
+    /** 最近一次截帧失败的原因（含 mpv 日志尾部）；成功时清空。 */
+    @Volatile
+    var lastCaptureFailure: String? = null
+        private set
 
     /** 轮询等待截图落盘。返回 false 表示超时。 */
     private fun awaitFile(file: File, timeoutMs: Long): Boolean {
@@ -1426,7 +1534,22 @@ class MpvPlaybackEngine(
         val renderedDrops: Int,
         val decoderDrops: Int,
         val mistimedFrames: Int,
-        val activeHwdec: String
+        val activeHwdec: String,
+        /**
+         * 三个计数属性是否读得到。
+         *
+         * false 不是「没丢帧」，而是「这条链路的丢帧数据根本取不到」——真机上必须能区分，
+         * 否则「mpv 不掉帧」和「mpv 的统计坏了」看起来一模一样。
+         */
+        val readable: Boolean = true,
+        /** mpv 是否已经配好视频输出；false 说明画面根本没起来。 */
+        val voConfigured: Boolean? = null,
+        /** 当前视频输出（`gpu-next` / `gpu` / 空）。 */
+        val currentVo: String = "",
+        /** 实测解码帧率；与 displayFps 差得多说明音画不同步或解码跟不上。 */
+        val estimatedFps: Double = -1.0,
+        /** 屏幕刷新率。 */
+        val displayFps: Double = -1.0
     )
 
     companion object {
@@ -1503,7 +1626,9 @@ class MpvPlaybackEngine(
         private const val CAPTURE_DIR_NAME = "lut-capture"
 
         /** 截帧等待上限。mpv 正常在一帧时间内落盘，2 秒足够覆盖暂停时等关键帧的情况。 */
-        private const val CAPTURE_TIMEOUT_MS = 2_000L
+        // 2s 在真机上经常不够：mpv 要等下一帧渲染完才落盘，高清 + 硬解切档时更慢。
+        // 自动调参是用户主动点的按钮，多等 2 秒远好过「抓不到画面」。
+        private const val CAPTURE_TIMEOUT_MS = 4_000L
 
         /** 轮询截图文件的间隔。 */
         private const val CAPTURE_POLL_MS = 25L

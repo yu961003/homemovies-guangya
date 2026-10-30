@@ -1,6 +1,7 @@
 package com.example.localmovielibrarz.scraper
 
 import okhttp3.ResponseBody
+import okio.Buffer
 import java.io.IOException
 
 /**
@@ -50,14 +51,36 @@ internal object ScraperResponseGuard {
         else -> DEFAULT_PAGE_LIMIT_BYTES
     }
 
-    /** 限量读取响应体；超限抛 IOException（上限见 [pageLimitBytes]）。 */
+    /**
+     * 限量读取响应体；超限抛 IOException（上限见 [pageLimitBytes]）。
+     *
+     * ★ 2026-10-30 根因修复：原实现是 `source.readByteArray(maxBytes + 1)`。
+     * Okio 的 `readByteArray(byteCount)` 语义是「**恰好**读满 byteCount 个字节，
+     * 读不满就抛 EOFException」——而我们传的 byteCount 是上限（1~4 MiB），
+     * 正常页面（几十到几百 KB）永远读不满，于是**每一次**读正文都抛 EOFException。
+     *
+     * 这解释了真机日志里的两个反常现象：
+     * 1. Official / DMM2 / AVBase 三个毫不相干的站点，同一时刻都报裸 `EOFException`
+     *    （Okio 那个分支抛的异常没有 message，所以日志里只有一个类名）；
+     * 2. 只有 TheJavDB 正常返回 404 —— 它走 `body.string()` / 只看状态码，不经过这里。
+     *
+     * 现在改成「读到一个字节都不剩为止」：`source.read(buffer, remaining)` 在流结束时
+     * 返回 -1 而不是抛错；只有真的读到超过 maxBytes 才抛超限。
+     */
     fun readLimited(body: ResponseBody, maxBytes: Long = DEFAULT_PAGE_LIMIT_BYTES): ByteArray {
         val source = body.source()
-        val limited = source.readByteArray(maxBytes + 1)
-        if (limited.size.toLong() > maxBytes) {
-            throw IOException("响应体超过 ${maxBytes / 1024 / 1024}MB 限制，已中止读取")
+        val buffer = Buffer()
+        var total = 0L
+        while (true) {
+            // 最多再读「上限 + 1 - 已读」，多出的那 1 字节就是超限证据。
+            val read = source.read(buffer, maxBytes + 1 - total)
+            if (read == -1L) break
+            total += read
+            if (total > maxBytes) {
+                throw IOException("响应体超过 ${maxBytes / 1024 / 1024}MB 限制，已中止读取")
+            }
         }
-        return limited
+        return buffer.readByteArray()
     }
 
     /** 按来源限量读取响应体。 */

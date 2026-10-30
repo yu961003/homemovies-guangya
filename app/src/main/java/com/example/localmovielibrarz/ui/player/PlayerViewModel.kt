@@ -1691,10 +1691,29 @@ class PlayerViewModel(
                 val deltaDropped = if (lastDropped >= 0) dropped - lastDropped else 0
                 val deltaSkipped = if (lastSkipped >= 0) skipped - lastSkipped else 0
                 val deltaRendered = if (lastRendered >= 0) rendered - lastRendered else 0
-                // ③ 正确分母：只算真正送去渲染的帧，skipped 不计入（seek 回溯丢弃帧不再放大掉帧率）
-                val deltaTotal = deltaDropped + deltaRendered
+                // ③ 掉帧率口径（2026-10-30 修正）：
+                //   旧公式 `deltaDropped / (deltaDropped + deltaRendered)` 把 `skippedOutputBufferCount`
+                //   完全排除在外。但 ExoPlayer 的 skipped 恰恰是**渲染端来不及处理而丢掉已解码的帧**
+                //   （`VideoFrameReleaseControl` 判定「这一帧已经晚于显示时间」就 skip），
+                //   也就是用户眼睛看到的「卡顿/丢帧」里最直接的那一类。
+                //   真机日志（2026-10-30 21:25）就是 dropped=18 / **skipped=140** / rendered=63：
+                //   用旧公式算出来 18/(18+63) ≈ 22%（而且首采样 delta 为 0 时显示 0%），
+                //   损失最严重的 skipped 一个都没算进去——用户看到「还是掉帧」而监控说「0%」。
+                //   现在两条口径都算：`renderLossRate` 才是体感损失率，`dropRate` 保留旧口径便于对比历史日志。
+                val deltaTotal = deltaDropped + deltaSkipped + deltaRendered
                 val realDropRate = if (deltaTotal > 0) deltaDropped.toDouble() / deltaTotal else 0.0
+                val realLossRate =
+                    if (deltaTotal > 0) (deltaDropped + deltaSkipped).toDouble() / deltaTotal else 0.0
                 val dropRate = if (deltaTotal > 0) "%.1f%%".format(realDropRate * 100) else "0%"
+                val lossRate = if (deltaTotal > 0) "%.1f%%".format(realLossRate * 100) else "0%"
+                // 首采样（lastX 全是 -1）时 delta 恒为 0，事件里给一堆 0 看不出任何东西；
+                // 这种情况改用「从起播到现在的累计值」当基线口径，第一个事件就有意义。
+                val absoluteLossRate =
+                    if (dropped + skipped + rendered > 0) {
+                        (dropped + skipped).toDouble() / (dropped + skipped + rendered).toDouble()
+                    } else {
+                        0.0
+                    }
                 val countersChanged = dropped != lastDropped || skipped != lastSkipped || rendered != lastRendered
                 val maxConsecutiveNulls = rendered == lastRendered && dropped == lastDropped
                 lastDropped = dropped
@@ -1712,6 +1731,8 @@ class PlayerViewModel(
                             "deltaSkipped" to deltaSkipped.toString(),
                             "deltaRendered" to deltaRendered.toString(),
                             "dropRate" to dropRate,
+                            "renderLossRate" to lossRate,
+                            "absoluteLossRate" to "%.1f%%".format(absoluteLossRate * 100),
                             "positionMs" to pos.toString(),
                             "bufferedMs" to player.bufferedPosition.toString(),
                             "durationMs" to player.duration.toString(),
@@ -1721,7 +1742,8 @@ class PlayerViewModel(
                         )
                     )
                     // ④ 连续 2 个窗口（10 秒）掉帧率 >15% 才算真过载，消除 seek 恢复期瞬态误报
-                    if (realDropRate > 0.15) highDropStreak++ else highDropStreak = 0
+                    // 过载判据同口径：skipped 也是过载的表现，只看 dropped 会漏掉渲染端压力。
+                    if (realLossRate > 0.15) highDropStreak++ else highDropStreak = 0
                     if (highDropStreak >= 2) {
                         val nowMs = SystemClock.elapsedRealtime()
                         // 过载事件至少间隔 30 秒记录一次，避免刷屏
@@ -1732,6 +1754,7 @@ class PlayerViewModel(
                                 "player.decoderOverload",
                                 mapOf(
                                     "dropRate" to dropRate,
+                                    "renderLossRate" to lossRate,
                                     "deltaDropped" to deltaDropped.toString(),
                                     "deltaSkipped" to deltaSkipped.toString(),
                                     "deltaRendered" to deltaRendered.toString(),
@@ -1927,7 +1950,9 @@ class PlayerViewModel(
             cacheDir = File(application.cacheDir, MPV_SUBTITLE_CACHE_DIR),
             hwdecMode = settingsRepository.getMpvHwdecMode()
         )
-        val initError = engine.initialize()
+        // 把当前调色设置传进 initialize：LUT 必须在 mpv_initialize() 之前以
+        // --target-lut 下发，运行期再设不会重建渲染管线（详见 prepareInitialLut 的 KDoc）。
+        val initError = engine.initialize(initialLutSettings = currentLutSettings)
         if (initError != null) {
             engine.release()
             return initError
@@ -1946,6 +1971,8 @@ class PlayerViewModel(
             _uiState.update { it.copy(lutAutoTuneMessage = "实时调色未生效：$reason") }
         }
         engine.frameStatsReporter = { stats ->
+            // readable=false 表示这三个计数属性读不到（不是「没丢帧」）；带上 vo / fps
+            // 一起记，才能区分「VO 没起来（黑屏）」和「解码在跑但没出帧」。
             logPlaybackEvent(
                 "player.mpv.frames",
                 mapOf(
@@ -1953,14 +1980,18 @@ class PlayerViewModel(
                     "decoderDrops" to stats.decoderDrops.toString(),
                     "mistimedFrames" to stats.mistimedFrames.toString(),
                     "activeHwdec" to stats.activeHwdec,
-                    "hwdecMode" to settingsRepository.getMpvHwdecMode().id
+                    "hwdecMode" to settingsRepository.getMpvHwdecMode().id,
+                    "readable" to stats.readable.toString(),
+                    "voConfigured" to stats.voConfigured?.toString().orEmpty(),
+                    "currentVo" to stats.currentVo,
+                    "estimatedFps" to "%.2f".format(stats.estimatedFps),
+                    "displayFps" to "%.2f".format(stats.displayFps)
                 )
             )
         }
         engine.setSubtitleStyle(currentSubtitleStyle())
-        // 实时调色：在 load 之前下发，避免起播最初几帧是未调色的原片（那几帧会被用户看见）。
-        // 生成在 IO 线程、set 回主线程，与 load 并发执行不冲突——target-lut 是 vo 级选项，
-        // 与是否已装载媒体无关，装载后自然会用上最新那张。
+        // 实时调色：initialize 里已经把初始 LUT 作为 --target-lut 下发（签名也已记录），
+        // 这里只在设置确实变了时才会真正下发（applyLut 首行比对 lastLutSignature 早退）。
         engine.applyLut(currentLutSettings)
         // 比例模式是「UI 侧状态」，新建的 mpv 实例不知道用户之前选了哪个，
         // 这里按最近一次 applyResizeMode 的结果重新下发，避免切内核后画面突然回弹。
@@ -2079,7 +2110,15 @@ class PlayerViewModel(
             }
             try {
                 if (result == null) {
-                    _uiState.update { it.copy(lutAutoTuneMessage = "没抓到画面，换个能看清人脸的场景再试") }
+                    // 「抓不到画面」本身不是可执行的信息：把引擎记下的具体原因
+                    //（含截图超时 / 解码失败 / mpv 日志尾部）带到提示里。
+                    val reason = engine.lastCaptureFailure
+                    val message = if (reason.isNullOrBlank()) {
+                        "没抓到画面，换个能看清人脸的场景再试"
+                    } else {
+                        "没抓到画面：$reason"
+                    }
+                    _uiState.update { it.copy(lutAutoTuneMessage = message) }
                     return@launch
                 }
                 val analysis = result

@@ -3763,10 +3763,19 @@ private fun CloudFolderBatchTaskList(
     onResumeTask: (Long) -> Unit,
     onCancelTask: (Long) -> Unit
 ) {
+    // ★ 2026-10-30 修正：原来只留「未完成」，而「整夹跑完但有刮削失败」的任务状态是
+    // Completed（完成判定已改成「候选处理完就算结束」），于是列表直接变空、提示
+    // 「暂无未完成的文件夹发现任务」——用户既看不到这一批跑了多少，也没有任何可点的
+    // 按钮，反馈就是「查看不到具体进度，也无法操作暂停或继续」。
+    // 现在：未完成的全部保留，另加最近 [RECENT_COMPLETED_FOLDER_TASKS] 条已完成做留痕。
     val activeTasks = tasks.filter { it.status != CloudFolderBatchTaskStatus.Completed.name }
-    if (activeTasks.isEmpty()) {
+    val recentCompleted = tasks
+        .filter { it.status == CloudFolderBatchTaskStatus.Completed.name }
+        .sortedByDescending { it.updatedAt }
+        .take(RECENT_COMPLETED_FOLDER_TASKS)
+    if (activeTasks.isEmpty() && recentCompleted.isEmpty()) {
         Text(
-            text = "暂无未完成的文件夹发现任务。",
+            text = "暂无文件夹发现任务。整夹添加后会在这里显示进度，可在设置页随时回来查看。",
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
             style = MaterialTheme.typography.bodyMedium
         )
@@ -3789,8 +3798,28 @@ private fun CloudFolderBatchTaskList(
                 onCancel = { onCancelTask(task.id) }
             )
         }
+        if (recentCompleted.isNotEmpty()) {
+            Text(
+                text = "最近完成",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            recentCompleted.forEach { task ->
+                CloudFolderBatchTaskRow(
+                    task = task,
+                    runnerRunning = isRunning,
+                    onPause = { onPauseTask(task.id) },
+                    onResume = { onResumeTask(task.id) },
+                    onCancel = { onCancelTask(task.id) }
+                )
+            }
+        }
     }
 }
+
+/** 设置页「文件夹发现任务」里保留多少条已完成任务做留痕（未完成的全部保留）。 */
+private const val RECENT_COMPLETED_FOLDER_TASKS = 3
 
 /**
  * 文件夹批量的**整体**进度。
@@ -3950,7 +3979,9 @@ private fun CloudFolderBatchTaskRow(
                 task.status == CloudFolderBatchTaskStatus.Cancelled.name ||
                 task.status == CloudFolderBatchTaskStatus.Failed.name ||
                 (task.status == CloudFolderBatchTaskStatus.Running.name && !runnerRunning)
-            val canCancel = task.status != CloudFolderBatchTaskStatus.Cancelled.name
+            // 已完成的任务不该再出现「取消」：它已经跑完，取消按钮只会误导。
+            val canCancel = task.status != CloudFolderBatchTaskStatus.Cancelled.name &&
+                task.status != CloudFolderBatchTaskStatus.Completed.name
             if (canPause) {
                 OutlinedButton(
                     onClick = onPause,
