@@ -201,6 +201,15 @@ object OfficialPageExtractor {
             { metaRaw(text) },
             { definitionRaw(text) }
         )
+        // S1 系：一手资料在三处——`h2.p-workPage__title`（标题）、`p.p-workPage__text`（剧情）、
+        // `div.th`/`div.td`（资料栏）。把它们放到最前：`<title>` 与 meta 在这一系站点上
+        // 只剩站点名和一句宣传语，先读会把一手资料挡在后面（逐字段先到先得）。
+        OfficialExtractionProfile.WorkPageTable -> listOf(
+            { workPageRaw(text) },
+            { jsonLdRaw(text) },
+            { metaRaw(text) },
+            { definitionRaw(text) }
+        )
     }
 
     // ── ① JSON-LD ───────────────────────────────────────────────────────────
@@ -351,6 +360,84 @@ object OfficialPageExtractor {
             actors = splitList(pairValue(pairs, "出演者", "出演", "出演女優", "主演")),
             genres = splitList(pairValue(pairs, "ジャンル", "カテゴリ", "カテゴリー", "タグ"))
         )
+    }
+
+    // ── ③b `div.th` / `div.td` 资料栏（S1 系）──────────────────────────────
+
+    /**
+     * S1 系作品页的资料栏：`<div class="th">発売日</div><div class="td">2014年9月7日</div>`。
+     *
+     * 三处与 [definitionRaw] 不同，所以单开一层而不是改那条正则：
+     * 1. 值是**嵌套块**（`div.td` 里还有 `div.item`、多值 `<a>`），非贪婪的
+     *    `<div class="th">(.*?)</div>\s*<div class="td">(.*?)</div>` 会在内层第一个 `</div>`
+     *    收尾，`ジャンル` 只留下第一项。
+     * 2. 标题在 `h2.p-workPage__title`、剧情在 `p.p-workPage__text`，而这两个类名只出现在
+     *    这一系站点上（`og:title` 为 0、`og:image` 是站点 logo）。
+     * 3. 多值字段（`ジャンル`）每一项是一个 `<a>`，按 `<a>` 收比按分隔符切准。
+     *
+     * 取值窗口用「下一个 `div.th` 的位置」封闭，因为跨块的 `</div>` 数量不可数；窗口仍设上限，
+     * 防止最后一块被后续版面吞进去。
+     */
+    private fun workPageRaw(text: String): Raw {
+        val titles = WORK_PAGE_TITLE.findAll(text)
+            .map { PeachHtml.text(it.groupValues[1]) }
+            .filter { it.isNotEmpty() }
+            .toList()
+        val description = WORK_PAGE_TEXT.find(text)?.groupValues?.get(1).orEmpty().let { PeachHtml.text(it) }
+
+        val heads = WORK_PAGE_TH.findAll(text).toList()
+        if (heads.isEmpty()) {
+            // 只有标题/简介、没有资料栏的页也要能用：不要因为缺 th 就整层返回空。
+            return Raw(titles = titles, description = description)
+        }
+        // 标签 → 值块的原始 HTML。窗口用「下一个 div.th 的位置」封闭：块内嵌着数量不定的
+        // `</div>`，靠结束标签配对会在第一层就截断；末尾那块再用定长上限封住，防吃到页尾。
+        val blocks = ArrayList<Pair<String, String>>(heads.size)
+        for ((index, head) in heads.withIndex()) {
+            val label = PeachHtml.text(head.groupValues[1])
+            if (label.isEmpty()) continue
+            val from = head.range.last + 1
+            val to = if (index + 1 < heads.size) heads[index + 1].range.first else minOf(text.length, from + WORK_VALUE_LIMIT)
+            if (to <= from) continue
+            blocks += label to text.substring(from, to)
+        }
+        // 多值字段（ジャンル/女優）每项一个 `<a>`，按 `<a>` 收；日期、时长、品番没有 `<a>`，
+        // 退回整块纯文本。
+        fun valuesOf(vararg labels: String): List<String> {
+            for (want in labels) {
+                val block = blockOf(blocks, want) ?: continue
+                val links = WORK_PAGE_ANCHOR.findAll(block)
+                    .map { PeachHtml.text(it.groupValues[1]) }
+                    .filter { it.isNotEmpty() }
+                    .toList()
+                return if (links.isNotEmpty()) links else splitList(PeachHtml.text(block))
+            }
+            return emptyList()
+        }
+        fun textOf(vararg labels: String): String = valuesOf(*labels).firstOrNull().orEmpty()
+        return Raw(
+            titles = titles,
+            description = description,
+            release = textOf("発売日", "発売開始日", "リリース日", "発売"),
+            delivery = textOf("配信開始日", "配信日", "配信開始"),
+            runtime = textOf("収録時間", "再生時間", "収録"),
+            studio = textOf("メーカー", "メーカー名", "ブランド", "製作商"),
+            publisher = textOf("レーベル", "レーベル名", "ブランド"),
+            series = textOf("シリーズ", "シリーズ名"),
+            directors = valuesOf("監督", "監督名"),
+            actors = valuesOf("女優", "出演者", "出演", "出演女優", "主演"),
+            genres = valuesOf("ジャンル", "カテゴリ", "カテゴリー", "タグ")
+        )
+    }
+
+    /**
+     * 资料栏取值块：先按 [normalizeLabel] 精确配，再退「标签里含关键词」。
+     *
+     * 顺序与 [pairValue] 一致，行为才对得上：S1 写 `発売日`、别的站写 `発売日 (販売日)`。
+     */
+    private fun blockOf(blocks: List<Pair<String, String>>, want: String): String? {
+        blocks.firstOrNull { normalizeLabel(it.first) == normalizeLabel(want) }?.let { return it.second }
+        return blocks.firstOrNull { normalizeLabel(it.first).contains(normalizeLabel(want)) }?.second
     }
 
     /**
@@ -844,6 +931,30 @@ object OfficialPageExtractor {
         """<tr\b[^>]*>\s*<th\b[^>]*>(.*?)</th>\s*<td\b[^>]*>(.*?)</td>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
+
+    private val WORK_PAGE_TITLE = Regex(
+        """<h2\b[^>]*class\s*=\s*["'][^"']*\bp-workPage__title\b[^"']*["'][^>]*>(.*?)</h2>""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+
+    private val WORK_PAGE_TEXT = Regex(
+        """<p\b[^>]*class\s*=\s*["'][^"']*\bp-workPage__text\b[^"']*["'][^>]*>(.*?)</p>""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+
+    /** 资料栏的标签格：`<div class="th">発売日</div>`（允许 class 里还有别的词）。 */
+    private val WORK_PAGE_TH = Regex(
+        """<div\b[^>]*class\s*=\s*["'][^"']*\bth\b[^"']*["'][^>]*>(.*?)</div>""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+
+    private val WORK_PAGE_ANCHOR = Regex(
+        """<a\b[^>]*>(.*?)</a>""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+
+    /** 单个值块的扫描上限：只为封住「最后一块吃到页尾」，正常值都在几十字内。 */
+    private val WORK_VALUE_LIMIT = 4_000
 
     private val ANCHOR = Regex(
         """<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a>""",

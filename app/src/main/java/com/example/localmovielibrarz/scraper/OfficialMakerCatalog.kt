@@ -110,7 +110,18 @@ enum class OfficialExtractionProfile {
     InertiaJson,
 
     /** 只有纯 HTML 表格/定义列表，靠 `dt`/`dd`、`th`/`td` 的标签文字配对抽。 */
-    DefinitionList
+    DefinitionList,
+
+    /**
+     * `h2.p-workPage__title` + `p.p-workPage__text` + `div.th`/`div.td` 的标答栏（S1 系）。
+     *
+     * 与 [DefinitionList] 的区别有两处，都是 S1 实测出来的：
+     * 1. 标签栏不是 `dt`/`dd` 也不是 `tr`/`th`，而是 `div.th` → 相邻 `div.td`；
+     *    值里还嵌着 `<div class="item">` 与多值 `<a>`，非贪婪正则一遇到内层 `</div>` 就截断。
+     * 2. 标题与简介不在 meta 里：`og:title` 一个都没有，`og:image` 反而是站点 logo。
+     *    真正的一手标题在 `h2.p-workPage__title`、剧情在 `p.p-workPage__text`。
+     */
+    WorkPageTable
 }
 
 object OfficialMakerCatalog {
@@ -147,7 +158,11 @@ object OfficialMakerCatalog {
             // 兜底对它恒失败——这两条模板就是替代那条兜底的入口。
             detailUrlTemplate = "/works/detail/{code_compact}",
             searchUrlTemplate = "/search/list?keyword={code_compact}",
-            note = "S1 NO.1 STYLE 的站；模板已按实测补齐（compact 写法，连字符会命中空壳页）"
+            // 这一档是跟着 S1 实测出来的：页面没有任何 `ld+json` / `og:title`，标题在
+            // `h2.p-workPage__title`、简介在 `p.p-workPage__text`、资料栏是 `div.th`/`div.td`。
+            // 用 Generic 档只会从 `<title>` 拿到一个带站点名的串，其余字段全空。
+            profile = OfficialExtractionProfile.WorkPageTable,
+            note = "S1 NO.1 STYLE 的站；模板与抽取档均已按实测补齐（compact 写法，连字符会命中空壳页）"
         ),
         site(
             id = "moodyz",
@@ -466,6 +481,7 @@ object OfficialMakerCatalog {
             "", "generic", "auto", "default" -> OfficialExtractionProfile.Generic
             "inertia", "inertiajson", "jsonscript", "applicationjson" -> OfficialExtractionProfile.InertiaJson
             "definitionlist", "dl", "table", "html" -> OfficialExtractionProfile.DefinitionList
+            "workpagetable", "workpage", "workpagetb", "s1" -> OfficialExtractionProfile.WorkPageTable
             else -> OfficialExtractionProfile.Generic
         }
     }
