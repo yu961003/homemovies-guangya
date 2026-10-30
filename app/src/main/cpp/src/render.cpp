@@ -69,6 +69,19 @@ static int apply_wid_locked() {
 }
 
 jni_func(jint, attachSurface, jobject surface) {
+    if (!surface) {
+        ALOGE("attachSurface(): surface 为 null");
+        return -10;
+    }
+
+    // 同一次挂载被重复调用（Kotlin 侧因为「本句柄还没有 wid」会每轮重组都补一次）：
+    // 不必解绑重建，直接看这个句柄要不要补 wid 即可。
+    if (g_surface && env->IsSameObject(g_surface, surface)) {
+        if (!g_mpv)
+            return 0;
+        return g_surface_handle == g_mpv ? 0 : apply_wid_locked();
+    }
+
     // 没有句柄时照样把 surface 记下来：Compose 的 AndroidView 常常先于
     // createEngine 完成挂载，早到的 surface 必须留住，等 init 之后重放。
     if (g_surface) {
@@ -118,10 +131,19 @@ int apply_cached_surface_to_current_handle() {
 }
 
 jni_func(jint, detachSurface) {
-    MPV_CHECK_INT();
-
     if (!g_surface) {
         ALOGV("detachSurface(): 当前没有挂载 surface");
+        return 0;
+    }
+
+    // 没有句柄时也必须把 global ref 解掉：SurfaceView 销毁后这块 Surface 就废了，
+    // 若还留在 g_surface 里，下一次 init() 的 apply_wid_locked() 会把它交给
+    // ANativeWindow_fromSurface()——那是已失效的 native window，可能直接崩。
+    if (!g_mpv) {
+        ALOGV("detachSurface(): mpv 未创建，仅释放缓存的 surface");
+        env->DeleteGlobalRef(g_surface);
+        g_surface = nullptr;
+        g_surface_handle = nullptr;
         return 0;
     }
 
