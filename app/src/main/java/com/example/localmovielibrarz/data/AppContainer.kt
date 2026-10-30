@@ -31,6 +31,7 @@ import com.example.localmovielibrarz.scraper.ScrapeSourceHealthTracker
 import com.example.localmovielibrarz.diagnostics.RuntimeErrorLog
 import com.example.localmovielibrarz.data.repository.PlaybackProgressRepository
 import com.example.localmovielibrarz.data.repository.StrmScrapeRepository
+import com.example.localmovielibrarz.data.repository.StrmRegenerationTaskRepository
 import com.example.localmovielibrarz.data.repository.UsageStatsRepository
 import com.example.localmovielibrarz.cloudguangya.GuangyaApiClient
 import com.example.localmovielibrarz.cloudguangya.GuangyaBrowserRepository
@@ -80,7 +81,8 @@ class AppContainer(context: Context) {
         MIGRATION_17_18,
         MIGRATION_18_19,
         MIGRATION_19_20,
-        MIGRATION_20_21
+        MIGRATION_20_21,
+        MIGRATION_21_22
     ).addCallback(
         object : RoomDatabase.Callback() {
             override fun onOpen(db: SupportSQLiteDatabase) {
@@ -210,6 +212,16 @@ class AppContainer(context: Context) {
     val cloudVideoTaskRepository = CloudVideoTaskRepository(database.cloudVideoTaskDao())
 
     /**
+     * STRM 再生成任务（`strm_regeneration_tasks`）。
+     *
+     * 与 [cloudVideoTaskRepository] 并列而不是合并：那张表记「这部片入没入过库」，
+     * 这张表记「这部片的 .strm 被重新生成过几次、上次为什么失败」。分流点见
+     * `CloudVideoAddProcessor.runLockedImport` —— 那里是单视频入库与文件夹批量共用的
+     * STRM 写入阶段，再生成语义落在这一步。
+     */
+    val strmRegenerationTaskRepository = StrmRegenerationTaskRepository(database.strmRegenerationTaskDao())
+
+    /**
      * 任务账本（task_runs）：跨模块的「谁在跑、跑到哪、为什么停」。
      *
      * 与既有的 `cloud_folder_batch_tasks` / `cloud_video_tasks` 不是替代关系：
@@ -234,7 +246,8 @@ class AppContainer(context: Context) {
             settingsRepository = settingsRepository,
             movieRepository = movieRepository,
             scrapeRepository = strmScrapeRepository,
-            taskRunRepository = taskRunRepository
+            taskRunRepository = taskRunRepository,
+            strmRegenerationTaskRepository = strmRegenerationTaskRepository
         )
     }
     val cloudVideoTaskRunner by lazy {
@@ -803,6 +816,56 @@ class AppContainer(context: Context) {
                 db.execSQL(
                     "CREATE INDEX IF NOT EXISTS `index_local_subtitle_library_fileName` " +
                         "ON `local_subtitle_library` (`fileName`)"
+                )
+            }
+        }
+
+        /**
+         * 21 -> 22：STRM 再生成任务独立表。
+         *
+         * 为什么不复用 `cloud_video_tasks`：那张表以 pickcode 为主键、语义是「入没入过库」，
+         * Completed 之后不再重跑；再生成是同一部片可以反复重写同一个 .strm 的动作，
+         * 需要自己的 attempts / failureReason 才能按「再生成」维度统计与重试。
+         *
+         * DDL 必须与 [com.example.localmovielibrarz.data.local.StrmRegenerationTaskEntity]
+         * 由 Room 推导出的 schema 逐字一致（列序无关；类型、可空性、NOT NULL、索引名、
+         * 索引唯一性相关），否则 Room 启动时报 `Migration didn't properly handle`。
+         * Kotlin 里的 `= 0L` / `= false` 等默认值**不会**变成 SQLite DEFAULT，因此这里
+         * 不写 DEFAULT 子句，只写 NOT NULL。
+         */
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `strm_regeneration_tasks` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`pickcode` TEXT NOT NULL, " +
+                        "`fileName` TEXT NOT NULL, " +
+                        "`cid` INTEGER, " +
+                        "`fid` INTEGER, " +
+                        "`size` INTEGER, " +
+                        "`strmPath` TEXT, " +
+                        "`forceDistinct` INTEGER NOT NULL, " +
+                        "`status` TEXT NOT NULL, " +
+                        "`failureReason` TEXT, " +
+                        "`attempts` INTEGER NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL" +
+                        ")"
+                )
+                // 唯一：一个 pickcode 同时只该有一条再生成任务，重复入队走 REPLACE。
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_strm_regeneration_tasks_pickcode` " +
+                        "ON `strm_regeneration_tasks` (`pickcode`)"
+                )
+                // 非唯一：worker 取 nextPending 与统计未完成数。
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_strm_regeneration_tasks_status` " +
+                        "ON `strm_regeneration_tasks` (`status`)"
+                )
+                // 非唯一：设置页按最近活动排序。
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_strm_regeneration_tasks_updatedAt` " +
+                        "ON `strm_regeneration_tasks` (`updatedAt`)"
                 )
             }
         }

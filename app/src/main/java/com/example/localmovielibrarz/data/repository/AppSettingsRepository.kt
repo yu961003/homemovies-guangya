@@ -1000,6 +1000,31 @@ class AppSettingsRepository(context: Context) {
             .apply()
     }
 
+    fun getExternalSubtitleFontFamily(): String {
+        val raw = prefs.getString(KEY_EXTERNAL_SUBTITLE_FONT_FAMILY, DEFAULT_EXTERNAL_SUBTITLE_FONT_FAMILY).orEmpty()
+        // 存量配置里可能存着已经被删掉的族名（比如未来收窄候选表）。这里收敛到默认值，
+        // 而不是把不认识的字符串直接透给 Typeface.create()——那条路径在部分 ROM 上
+        // 不抛异常而是静默回退到默认字体，表现为「选了没效果」且没有日志可查。
+        return if (raw in EXTERNAL_SUBTITLE_FONT_FAMILIES) raw else DEFAULT_EXTERNAL_SUBTITLE_FONT_FAMILY
+    }
+
+    fun saveExternalSubtitleFontFamily(value: String) {
+        val normalized = if (value in EXTERNAL_SUBTITLE_FONT_FAMILIES) value else DEFAULT_EXTERNAL_SUBTITLE_FONT_FAMILY
+        prefs.edit().putString(KEY_EXTERNAL_SUBTITLE_FONT_FAMILY, normalized).apply()
+    }
+
+    fun getExternalSubtitleTextColor(): Int {
+        val raw = prefs.getInt(KEY_EXTERNAL_SUBTITLE_TEXT_COLOR, DEFAULT_EXTERNAL_SUBTITLE_TEXT_COLOR)
+        // 只接受候选表内的颜色：允许任意 ARGB 会让「黑色字幕 + 深色背景」这类
+        // 不可读组合被写进配置，而设置页又没有恢复入口。
+        return if (raw in EXTERNAL_SUBTITLE_TEXT_COLORS) raw else DEFAULT_EXTERNAL_SUBTITLE_TEXT_COLOR
+    }
+
+    fun saveExternalSubtitleTextColor(value: Int) {
+        val normalized = if (value in EXTERNAL_SUBTITLE_TEXT_COLORS) value else DEFAULT_EXTERNAL_SUBTITLE_TEXT_COLOR
+        prefs.edit().putInt(KEY_EXTERNAL_SUBTITLE_TEXT_COLOR, normalized).apply()
+    }
+
     fun getExternalSubtitleBottomPaddingPercent(): Int =
         prefs.getInt(KEY_EXTERNAL_SUBTITLE_BOTTOM_PADDING_PERCENT, DEFAULT_EXTERNAL_SUBTITLE_BOTTOM_PADDING_PERCENT)
             .coerceIn(MIN_EXTERNAL_SUBTITLE_BOTTOM_PADDING_PERCENT, MAX_EXTERNAL_SUBTITLE_BOTTOM_PADDING_PERCENT)
@@ -1430,6 +1455,11 @@ class AppSettingsRepository(context: Context) {
         const val KEY_CLOUD_SCRAPE_SKIP_BELOW_SIZE_MB = "cloud_scrape_skip_below_size_mb"
         const val KEY_GUANGYA_BATCH_RENAME_TEMPLATES = "guangya_batch_rename_templates_v2"
         const val KEY_EXTERNAL_SUBTITLE_FONT_SIZE_SP = "external_subtitle_font_size_sp"
+        // §5.2-8：字体族与文字颜色。键名刻意与 C 版对齐（external_subtitle_font_family /
+        // external_subtitle_text_color），这样从 C 版导入的旧配置将来可以直接沿用同一串键，
+        // 不需要再做一次键名迁移。
+        const val KEY_EXTERNAL_SUBTITLE_FONT_FAMILY = "external_subtitle_font_family"
+        const val KEY_EXTERNAL_SUBTITLE_TEXT_COLOR = "external_subtitle_text_color"
         const val KEY_LIGHT_THEME_ENABLED = "light_theme_enabled"
         const val KEY_EXTERNAL_SUBTITLE_BOTTOM_PADDING_PERCENT = "external_subtitle_bottom_padding_percent"
         const val KEY_EXTERNAL_SUBTITLE_BACKGROUND_ALPHA_PERCENT = "external_subtitle_background_alpha_percent"
@@ -1563,6 +1593,24 @@ class AppSettingsRepository(context: Context) {
         val DEFAULT_NUMBER_RECOGNITION_IGNORED_SUFFIXES = NumberRecognitionRules.DEFAULT_IGNORED_SUFFIXES
         val DEFAULT_NUMBER_RECOGNITION_PART_MARKERS = NumberRecognitionRules.DEFAULT_PART_MARKERS
         const val DEFAULT_EXTERNAL_SUBTITLE_FONT_SIZE_SP = 22
+        // 空串 = 跟随系统默认字体。用空串而不是 "sans-serif" 作默认值，是因为
+        // Typeface.DEFAULT 与 Typeface.SANS_SERIF 在部分国产 ROM 上会被映射到不同字重，
+        // 「不设置」必须能表达成「完全不动系统默认」。
+        const val DEFAULT_EXTERNAL_SUBTITLE_FONT_FAMILY = ""
+        const val DEFAULT_EXTERNAL_SUBTITLE_TEXT_COLOR = 0xFFFFFFFF.toInt()
+        /** 可选字体族：值直接是 android.graphics.Typeface 认的族名，空串代表系统默认。 */
+        val EXTERNAL_SUBTITLE_FONT_FAMILIES = listOf("", "sans-serif", "serif", "monospace", "sans-serif-light", "sans-serif-condensed")
+        /** 可选文字颜色的中文名，与 [EXTERNAL_SUBTITLE_TEXT_COLORS] 下标一一对应。 */
+        val EXTERNAL_SUBTITLE_FONT_FAMILY_LABELS = listOf("系统默认", "无衬线", "衬线", "等宽", "细体", "窄体")
+        val EXTERNAL_SUBTITLE_TEXT_COLORS = listOf(
+            0xFFFFFFFF.toInt(),
+            0xFFFFEB3B.toInt(),
+            0xFF4CAF50.toInt(),
+            0xFF2196F3.toInt(),
+            0xFFFF9800.toInt(),
+            0xFF000000.toInt()
+        )
+        val EXTERNAL_SUBTITLE_TEXT_COLOR_LABELS = listOf("白色", "黄色", "绿色", "蓝色", "橙色", "黑色")
         const val DEFAULT_PLAYER_SEEK_SECONDS = 10
         const val MIN_PLAYER_SEEK_SECONDS = 1
         const val MAX_PLAYER_SEEK_SECONDS = 120

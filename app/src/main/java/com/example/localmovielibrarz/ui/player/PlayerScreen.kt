@@ -1539,6 +1539,20 @@ private fun SubtitleOptionRow(
     }
 }
 
+/**
+ * 把设置里的字体族名翻译成 [Typeface]。
+ *
+ * 为什么不用 `Typeface.create(name, Typeface.BOLD)`：部分国产 ROM 的 Typeface 实现
+ * 在族名不存在时**不抛异常、也不返回 null**，而是静默回退到默认字体，且系统层没有
+ * 任何日志——表现出来就是「选了字体但字幕没变化」，且线上无法排查。所以候选表在
+ * 仓库层已经收敛过（[AppSettingsRepository.EXTERNAL_SUBTITLE_FONT_FAMILIES]），
+ * 这里再兜一层：空串走 DEFAULT，其余族名建不出对应 Typeface 时也退回 DEFAULT。
+ */
+private fun resolveExternalSubtitleTypeface(family: String): Typeface {
+    if (family.isBlank()) return Typeface.DEFAULT_BOLD
+    return runCatching { Typeface.create(family, Typeface.BOLD) }.getOrNull() ?: Typeface.DEFAULT_BOLD
+}
+
 @OptIn(UnstableApi::class)
 private fun PlayerView.applyExternalSubtitleStyle(style: ExternalSubtitleStyleSettings) {
     val backgroundAlpha = (style.backgroundAlphaPercent.coerceIn(0, 100) * 255 / 100).coerceIn(0, 255)
@@ -1548,12 +1562,15 @@ private fun PlayerView.applyExternalSubtitleStyle(style: ExternalSubtitleStyleSe
     subtitleView?.setBottomPaddingFraction(style.bottomPaddingPercent.coerceIn(0, 100) / 100f)
     subtitleView?.setStyle(
         CaptionStyleCompat(
-            AndroidColor.WHITE,
+            // §5.2-8：文字颜色改为可配置。前景色直接吃 ARGB，不做 alpha 处理——
+            // 半透明字幕在描边边缘会出现双色，这是 CaptionStyleCompat 的已知行为，
+            // 与「颜色可读性」取舍后选择只给不透明色。
+            style.textColorArgb,
             AndroidColor.argb(backgroundAlpha, 0, 0, 0),
             AndroidColor.TRANSPARENT,
             CaptionStyleCompat.EDGE_TYPE_OUTLINE,
             AndroidColor.BLACK,
-            Typeface.DEFAULT_BOLD
+            resolveExternalSubtitleTypeface(style.fontFamily)
         )
     )
 }

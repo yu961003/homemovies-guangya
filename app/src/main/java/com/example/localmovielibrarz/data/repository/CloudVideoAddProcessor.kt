@@ -19,7 +19,14 @@ class CloudVideoAddProcessor(
     private val movieRepository: MovieRepository,
     private val scrapeRepository: StrmScrapeRepository,
     /** 统一任务账本；默认 null 让既有构造点与单测无需立刻跟进，装配点在 `AppContainer`。 */
-    private val taskRunRepository: TaskRunRepository? = null
+    private val taskRunRepository: TaskRunRepository? = null,
+    /**
+     * STRM 再生成任务表（`strm_regeneration_tasks`）的旁路记账。
+     *
+     * 默认 null 的理由与 [taskRunRepository] 相同：既有构造点/单测不必立刻跟进。
+     * 记账是**旁路**——它抛错绝不能打断 STRM 生成与入库主流程，所以调用点全部 `runCatching`。
+     */
+    private val strmRegenerationTaskRepository: StrmRegenerationTaskRepository? = null
 ) {
     private val addLock = Mutex()
 
@@ -130,13 +137,93 @@ class CloudVideoAddProcessor(
         }
     }
 
+    /**
+     * 「STRM 再生成」的落点：单视频入库与文件夹批量共用的 STRM 写入阶段。
+     *
+     * 两条链路（`CloudVideoTaskRunner` 拉单视频、`CloudFolderBatchTaskRunner` 拉文件夹批量）
+     * 最终都汇到 [runLockedImport]，再由这里调 `generateStrmForVideo` 真正把 .strm 写到
+     * 用户选的影片库目录。所以把 `strm_regeneration_tasks` 的记账放在这一层，能同时覆盖
+     * 「单片重生成」与「批量重生成」两种入口，且不必给 `Cloud115StrmRepository` 加依赖
+     * （那个类还被 `ui/cloud/CloudBrowserViewModel` 直接调用，改构造签名会牵连 UI）。
+     *
+     * 记账是旁路，三条铁律：
+     * 1. 入队失败只打日志，**照常生成 STRM**——这次再生成不该因为记账失败而失败；
+     * 2. 生成成功后 markCompleted 记下实际产出的 strm URI；
+     * 3. 生成抛出非取消异常时 markFailed（attempts+1），然后把异常原样抛出——
+     *    入库链路的失败处理（ledger / 批量任务计数）依赖这个异常，不能吞。
+     *
+     * 取消（用户暂停/切走）**不记失败**：入队时写的是 Pending，取消后保持 Pending，
+     * 下次启动会被当成未完成的任务重新拾起；把它记成 Failed 会让「暂停」污染失败率。
+     */
+    private suspend fun writeStrmAndRecordRegeneration(
+        item: Cloud115FileItem,
+        pickcode: String,
+        forceDistinct: Boolean
+    ): GeneratedStrmFile {
+        val regeneration = strmRegenerationTaskRepository
+            ?: return strmRepository.generateStrmForVideo(item, forceDistinct = forceDistinct)
+
+        val enqueued = runCatching {
+            regeneration.enqueue(item = item, pickcode = pickcode, forceDistinct = forceDistinct)
+        }.onFailure { error ->
+            if (error is CancellationException) throw error
+            scrapeRepository.appendLog(
+                "STRM 再生成任务入队失败，本次仍继续生成：${item.name} / $pickcode，" +
+                    "原因：${error.message ?: error::class.java.simpleName}"
+            )
+        }.getOrNull()
+
+        val generated = try {
+            strmRepository.generateStrmForVideo(item, forceDistinct = forceDistinct)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            if (enqueued != null) {
+                // 失败也要写：此时协程可能已被取消，必须 NonCancellable 才能落库。
+                withContext(NonCancellable) {
+                    runCatching {
+                        regeneration.markFailed(
+                            pickcode = pickcode,
+                            reason = error.message?.takeIf(String::isNotBlank)
+                                ?: error::class.java.simpleName
+                        )
+                    }.onFailure { recordError ->
+                        scrapeRepository.appendLog(
+                            "STRM 再生成失败状态落库失败：$pickcode，" +
+                                "原因：${recordError.message ?: recordError::class.java.simpleName}"
+                        )
+                    }
+                }
+            }
+            throw error
+        }
+
+        if (enqueued != null) {
+            withContext(NonCancellable) {
+                runCatching {
+                    regeneration.markCompleted(pickcode = pickcode, strmPath = generated.strmUri)
+                }.onFailure { recordError ->
+                    scrapeRepository.appendLog(
+                        "STRM 再生成完成状态落库失败：$pickcode，" +
+                            "原因：${recordError.message ?: recordError::class.java.simpleName}"
+                    )
+                }
+            }
+        }
+        return generated
+    }
+
     private suspend fun runLockedImport(
         item: Cloud115FileItem,
         pickcode: String,
         forceDistinct: Boolean
     ) {
         scrapeRepository.appendLog("开始处理持久化网盘任务：${item.name} / $pickcode")
-        val generated = strmRepository.generateStrmForVideo(item, forceDistinct = forceDistinct)
+        val generated = writeStrmAndRecordRegeneration(
+            item = item,
+            pickcode = pickcode,
+            forceDistinct = forceDistinct
+        )
         val libraryRoot = settingsRepository.getLibraryRootUri()
             ?: error("请先到设置页选择影片库目录")
         val rootUri = Uri.parse(libraryRoot)

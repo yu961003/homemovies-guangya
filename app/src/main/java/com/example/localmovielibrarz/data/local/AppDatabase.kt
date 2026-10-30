@@ -24,9 +24,15 @@ import androidx.room.TypeConverters
         // ★ 20 -> 21：本地字幕库索引。用户把手机里某个文件夹选成「字幕库」后，
         // 扫描结果落这张表，播放时按番号直接查；不塞进 movies 是因为字幕与影片是
         // 多对一（一部片可以有简中/繁中/日文多份），塞进主表会让主表按字幕数量膨胀。
-        LocalSubtitleLibraryEntity::class
+        LocalSubtitleLibraryEntity::class,
+        // ★ 21 -> 22：STRM 再生成任务独立成表。与既有 cloud_video_tasks 不是同一件事：
+        // 那张表的主键是 pickcode，语义是「这部片入没入过库」，Completed 之后就不再重跑；
+        // 而再生成是「同一部片可以反复重写同一个 .strm」（换盘、换库根目录、换下载前缀），
+        // 需要独立的 attempts / failureReason 才能按「再生成」维度统计与重试。
+        // 混进 cloud_video_tasks 会让两类失败在统计里串味，也会把入库断点一起重置。
+        StrmRegenerationTaskEntity::class
     ],
-    version = 21,
+    version = 22,
     exportSchema = true
 )
 @TypeConverters(MovieTypeConverters::class)
@@ -43,4 +49,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun sourceHealthDao(): SourceHealthDao
     abstract fun taskRunDao(): TaskRunDao
     abstract fun localSubtitleLibraryDao(): LocalSubtitleLibraryDao
+    abstract fun strmRegenerationTaskDao(): StrmRegenerationTaskDao
 }

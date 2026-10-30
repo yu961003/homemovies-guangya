@@ -47,6 +47,7 @@ import com.example.localmovielibrarz.playback.engine.EngineAvailability
 import com.example.localmovielibrarz.playback.engine.EngineSwitchPlanner
 import com.example.localmovielibrarz.playback.engine.ExternalSubtitle
 import com.example.localmovielibrarz.playback.engine.MpvHwdecMode
+import com.example.localmovielibrarz.playback.engine.ExoLutApplier
 import com.example.localmovielibrarz.playback.engine.MpvPlaybackEngine.MpvAudioTrack
 import com.example.localmovielibrarz.playback.engine.MpvPlaybackEngine
 import com.example.localmovielibrarz.playback.engine.PlaybackEngineFactory
@@ -144,6 +145,23 @@ class PlayerViewModel(
     private var latestVideoDecoder: String? = null
     private var latestAudioDecoder: String? = null
     private val vrModeSettings = VrModeSettings(application)
+
+    /**
+     * exo 内核的 LUT 下发状态机（§5.2-6）。
+     *
+     * 与 mpv 侧 `MpvPlaybackEngine.applyLut` 一一对应：同一个 [LutSettings]、同一套
+     * `signature()` 去重口径，只是落地通道换成 media3 的 `setVideoEffects`。放在
+     * ViewModel 里而不是引擎适配器里，是因为 exo 的播放器实例由 `createPlayer`
+     * 创建、由 `_uiState.player` 持有，引擎适配器拿不到这个实例。
+     */
+    private val exoLutApplier = ExoLutApplier { error ->
+        // 调色失败绝不能冒泡到播放路径：LUT 只是画面增强，宁可原色也不能黑屏。
+        // 但也不能静默——落到播放事件日志里，用户反馈「调色没效果」时能查。
+        logPlaybackEvent(
+            "player.lut.exo.failed",
+            mapOf("error" to (error::class.java.simpleName + ": " + (error.message ?: "")))
+        )
+    }
 
     // ───────────────────────────────────────────────────────────────────────
     // 双引擎运行态（见 README-MPV 与对齐表）：
@@ -540,6 +558,13 @@ class PlayerViewModel(
         // 解码器诊断：通过 queryActualDecoders() 从 ExoPlayer 渲染器实例直接查询
         // 实际使用的解码器（硬解 MediaCodec 名 / FFmpeg 软解），不再靠编码格式推断。
 
+        // §5.2-6：把当前调色设置挂到刚建好的 exo 实例上。必须 reset()——新建实例时
+        // 上一次会话已经下发过同样的 signature，不去重键就要么漏下发、要么把效果发给
+        // 旧实例。setVideoEffects 要求在主线程调用，createPlayer 全程在主线程。
+        exoLutApplier.reset()
+        exoLutApplier.apply(currentLutSettings) { effects ->
+            player.setVideoEffects(effects)
+        }
 
         return player
     }
@@ -646,7 +671,9 @@ class PlayerViewModel(
         ExternalSubtitleStyleSettings(
             fontSizeSp = settingsRepository.getExternalSubtitleFontSizeSp(),
             bottomPaddingPercent = settingsRepository.getExternalSubtitleBottomPaddingPercent(),
-            backgroundAlphaPercent = settingsRepository.getExternalSubtitleBackgroundAlphaPercent()
+            backgroundAlphaPercent = settingsRepository.getExternalSubtitleBackgroundAlphaPercent(),
+            fontFamily = settingsRepository.getExternalSubtitleFontFamily(),
+            textColorArgb = settingsRepository.getExternalSubtitleTextColor()
         )
 
     private fun progressBarStyleSettings(): PlayerProgressBarStyleSettings =
@@ -2060,6 +2087,13 @@ class PlayerViewModel(
                 currentLutSettings = next
                 if (isMpvActive()) {
                     mpvEngine?.applyLut(next)
+                } else {
+                    // §5.2-6：exo 侧同样实时生效。这里现取 `_uiState.value.player` 而不是
+                    // 捕获某个可能已被重建的实例；播放器还没发布到 state 时（起播早期）
+                    // 现取会是 null，此时直接跳过——createPlayer 里那次下发已经覆盖。
+                    (uiState.value.player as? ExoPlayer)?.let { exo ->
+                        exoLutApplier.apply(next) { effects -> exo.setVideoEffects(effects) }
+                    }
                 }
             }
         }
@@ -2631,7 +2665,13 @@ data class AudioTrackOption(
 data class ExternalSubtitleStyleSettings(
     val fontSizeSp: Int = AppSettingsRepository.DEFAULT_EXTERNAL_SUBTITLE_FONT_SIZE_SP,
     val bottomPaddingPercent: Int = AppSettingsRepository.DEFAULT_EXTERNAL_SUBTITLE_BOTTOM_PADDING_PERCENT,
-    val backgroundAlphaPercent: Int = AppSettingsRepository.DEFAULT_EXTERNAL_SUBTITLE_BACKGROUND_ALPHA_PERCENT
+    val backgroundAlphaPercent: Int = AppSettingsRepository.DEFAULT_EXTERNAL_SUBTITLE_BACKGROUND_ALPHA_PERCENT,
+    // §5.2-8：字体族与文字颜色。用 String 存族名、Int 存 ARGB，而不是直接存
+    // android.graphics.Typeface / ColorInt 包装类——这个 data class 会被 Compose 当
+    // state 比较（equals），Typeface 的 equals 不保证同族同权重对象相等，
+    // 会导致「设置没变却触发重组」或「设置变了却不重组」两类难查的闪烁。
+    val fontFamily: String = AppSettingsRepository.DEFAULT_EXTERNAL_SUBTITLE_FONT_FAMILY,
+    val textColorArgb: Int = AppSettingsRepository.DEFAULT_EXTERNAL_SUBTITLE_TEXT_COLOR
 )
 
 data class PlayerProgressBarStyleSettings(

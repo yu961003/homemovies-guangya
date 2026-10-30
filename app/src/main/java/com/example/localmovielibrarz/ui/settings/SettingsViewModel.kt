@@ -747,6 +747,26 @@ class SettingsViewModel(
         }
     }
 
+    fun updateExternalSubtitleFontFamily(value: String) {
+        repository.saveExternalSubtitleFontFamily(value)
+        _uiState.update {
+            it.copy(
+                externalSubtitleFontFamily = repository.getExternalSubtitleFontFamily(),
+                savedMessage = "外挂字幕字体已调整"
+            )
+        }
+    }
+
+    fun updateExternalSubtitleTextColor(value: Int) {
+        repository.saveExternalSubtitleTextColor(value)
+        _uiState.update {
+            it.copy(
+                externalSubtitleTextColor = repository.getExternalSubtitleTextColor(),
+                savedMessage = "外挂字幕颜色已调整"
+            )
+        }
+    }
+
     fun updatePlayerSeekBackSeconds(value: Int) {
         repository.savePlayerSeekBackSeconds(value)
         _uiState.update { it.copy(playerSeekBackSeconds = repository.getPlayerSeekBackSeconds(), savedMessage = "后退时间已调整") }
@@ -877,6 +897,8 @@ class SettingsViewModel(
         _uiState.update {
             it.copy(
                 externalSubtitleBackgroundAlphaPercent = repository.getExternalSubtitleBackgroundAlphaPercent(),
+            externalSubtitleFontFamily = repository.getExternalSubtitleFontFamily(),
+            externalSubtitleTextColor = repository.getExternalSubtitleTextColor(),
                 savedMessage = "外挂字幕背景已调整"
             )
         }
@@ -1832,6 +1854,10 @@ data class SettingsUiState(
     val externalSubtitleFontSizeSp: Int = AppSettingsRepository.DEFAULT_EXTERNAL_SUBTITLE_FONT_SIZE_SP,
     val externalSubtitleBottomPaddingPercent: Int = AppSettingsRepository.DEFAULT_EXTERNAL_SUBTITLE_BOTTOM_PADDING_PERCENT,
     val externalSubtitleBackgroundAlphaPercent: Int = AppSettingsRepository.DEFAULT_EXTERNAL_SUBTITLE_BACKGROUND_ALPHA_PERCENT,
+    /** §5.2-8：字幕字体族（空串 = 系统默认）。 */
+    val externalSubtitleFontFamily: String = AppSettingsRepository.DEFAULT_EXTERNAL_SUBTITLE_FONT_FAMILY,
+    /** §5.2-8：字幕文字颜色（ARGB）。 */
+    val externalSubtitleTextColor: Int = AppSettingsRepository.DEFAULT_EXTERNAL_SUBTITLE_TEXT_COLOR,
     val playerProgressBarWidthDp: Int = AppSettingsRepository.DEFAULT_PLAYER_PROGRESS_BAR_WIDTH_DP,
     val playerProgressBarColor: Int = AppSettingsRepository.DEFAULT_PLAYER_PROGRESS_BAR_COLOR,
     val playerProgressBarAlphaPercent: Int = AppSettingsRepository.DEFAULT_PLAYER_PROGRESS_BAR_ALPHA_PERCENT,

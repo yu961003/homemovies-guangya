@@ -229,6 +229,12 @@ dependencies {
 
     implementation("androidx.media3:media3-exoplayer:1.9.1")
     implementation("androidx.media3:media3-ui:1.9.1")
+    // §5.2-6：exo 内核的 GL LUT。media3-effect 1.9.1 与上面两个 media3 制品同版本，
+    // 避免混版导致 Transformer/VideoFrameProcessor 的 @UnstableApi 签名不匹配。
+    implementation("androidx.media3:media3-effect:1.9.1")
+    // §5.2-7：字幕库自动增量重扫的周期任务调度。用 2.9.1（末个 2.x 稳定版），
+    // 3.x 需要 compileSdk 36，本工程仍是 35；2.9.1 带 androidx.startup 初始化钩子。
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     // 双核心 v5：移除 nextlib-media3ext（minCompileSdk 冲突 / 维护成本高），
     // Exo 软解短板改由 mpv 核心兜底（§5.4）。ExoPlayer 回归原生解码 + 解码器回退。
 

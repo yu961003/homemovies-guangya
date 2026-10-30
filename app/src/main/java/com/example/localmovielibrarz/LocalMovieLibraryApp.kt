@@ -6,6 +6,7 @@ import android.content.res.Configuration
 import android.util.Log
 import com.example.localmovielibrarz.data.AppContainer
 import com.example.localmovielibrarz.scraper.browser.ForegroundActivityTracker
+import com.example.localmovielibrarz.subtitle.SubtitleLibraryRescanScheduler
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -43,6 +44,16 @@ class LocalMovieLibraryApp : Application() {
             override fun onLowMemory() = clearUriImageMemoryCache()
             override fun onConfigurationChanged(newConfig: Configuration) = Unit
         })
+        // §5.2-7 字幕库自动增量重扫：登记一个 WorkManager 周期任务，把用户新拷进字幕库目录的
+        // 字幕自动收进索引，不再依赖「设置页手动点重扫」（缺陷 B-2）。放在 onCreate 末尾，
+        // 是因为 Worker 自己要从 container 里读配置与数据库，必须等 container 构造完再登记。
+        // WorkManager 未初始化 / 厂商 ROM 限制都可能在登记时抛异常，Application 启动不能被
+        // 一个后台任务拖垮，所以整体兜底：失败只记日志，下次启动会重新登记。
+        try {
+            SubtitleLibraryRescanScheduler.schedule(this)
+        } catch (t: Throwable) {
+            Log.w(TAG, "字幕库周期重扫调度失败", t)
+        }
     }
 
     private companion object {

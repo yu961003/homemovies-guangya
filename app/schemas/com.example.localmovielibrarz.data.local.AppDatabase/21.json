@@ -1,0 +1,1275 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 21,
+    "identityHash": "f16be2af20325765f91975f7fdb5683c",
+    "entities": [
+      {
+        "tableName": "movies",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `libraryRootUri` TEXT NOT NULL, `videoUri` TEXT NOT NULL, `videoName` TEXT NOT NULL, `sortTitle` TEXT NOT NULL, `title` TEXT NOT NULL, `originalTitle` TEXT, `plot` TEXT, `outline` TEXT, `year` INTEGER, `premiered` TEXT, `runtimeMinutes` INTEGER, `mpaa` TEXT, `studios` TEXT NOT NULL, `series` TEXT, `directors` TEXT NOT NULL, `actors` TEXT NOT NULL, `genres` TEXT NOT NULL, `tags` TEXT NOT NULL, `rating` REAL, `uniqueIds` TEXT NOT NULL, `posterUri` TEXT, `fanartUri` TEXT, `thumbUri` TEXT, `nfoUri` TEXT, `scannedAtMillis` INTEGER NOT NULL, `isFavorite` INTEGER NOT NULL, `isWatched` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `scrapeFailureReason` TEXT, `scrapeTaskStatus` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "libraryRootUri",
+            "columnName": "libraryRootUri",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "videoUri",
+            "columnName": "videoUri",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "videoName",
+            "columnName": "videoName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sortTitle",
+            "columnName": "sortTitle",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "originalTitle",
+            "columnName": "originalTitle",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "plot",
+            "columnName": "plot",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "outline",
+            "columnName": "outline",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "year",
+            "columnName": "year",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "premiered",
+            "columnName": "premiered",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "runtimeMinutes",
+            "columnName": "runtimeMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "mpaa",
+            "columnName": "mpaa",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "studios",
+            "columnName": "studios",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "series",
+            "columnName": "series",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "directors",
+            "columnName": "directors",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "actors",
+            "columnName": "actors",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "genres",
+            "columnName": "genres",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tags",
+            "columnName": "tags",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rating",
+            "columnName": "rating",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "uniqueIds",
+            "columnName": "uniqueIds",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "posterUri",
+            "columnName": "posterUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "fanartUri",
+            "columnName": "fanartUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "thumbUri",
+            "columnName": "thumbUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "nfoUri",
+            "columnName": "nfoUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "scannedAtMillis",
+            "columnName": "scannedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isFavorite",
+            "columnName": "isFavorite",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isWatched",
+            "columnName": "isWatched",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scrapeFailureReason",
+            "columnName": "scrapeFailureReason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "scrapeTaskStatus",
+            "columnName": "scrapeTaskStatus",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_movies_videoUri",
+            "unique": true,
+            "columnNames": [
+              "videoUri"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_movies_videoUri` ON `${TABLE_NAME}` (`videoUri`)"
+          },
+          {
+            "name": "index_movies_libraryRootUri",
+            "unique": false,
+            "columnNames": [
+              "libraryRootUri"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_movies_libraryRootUri` ON `${TABLE_NAME}` (`libraryRootUri`)"
+          },
+          {
+            "name": "index_movies_sortTitle",
+            "unique": false,
+            "columnNames": [
+              "sortTitle"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_movies_sortTitle` ON `${TABLE_NAME}` (`sortTitle`)"
+          },
+          {
+            "name": "index_movies_scannedAtMillis",
+            "unique": false,
+            "columnNames": [
+              "scannedAtMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_movies_scannedAtMillis` ON `${TABLE_NAME}` (`scannedAtMillis`)"
+          },
+          {
+            "name": "index_movies_updatedAt",
+            "unique": false,
+            "columnNames": [
+              "updatedAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_movies_updatedAt` ON `${TABLE_NAME}` (`updatedAt`)"
+          },
+          {
+            "name": "index_movies_year",
+            "unique": false,
+            "columnNames": [
+              "year"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_movies_year` ON `${TABLE_NAME}` (`year`)"
+          },
+          {
+            "name": "index_movies_isFavorite",
+            "unique": false,
+            "columnNames": [
+              "isFavorite"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_movies_isFavorite` ON `${TABLE_NAME}` (`isFavorite`)"
+          },
+          {
+            "name": "index_movies_isWatched",
+            "unique": false,
+            "columnNames": [
+              "isWatched"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_movies_isWatched` ON `${TABLE_NAME}` (`isWatched`)"
+          },
+          {
+            "name": "index_movies_scrapeTaskStatus",
+            "unique": false,
+            "columnNames": [
+              "scrapeTaskStatus"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_movies_scrapeTaskStatus` ON `${TABLE_NAME}` (`scrapeTaskStatus`)"
+          }
+        ]
+      },
+      {
+        "tableName": "direct_links",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`pickcode` TEXT NOT NULL, `url` TEXT NOT NULL, `expiresAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`pickcode`))",
+        "fields": [
+          {
+            "fieldPath": "pickcode",
+            "columnName": "pickcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expiresAt",
+            "columnName": "expiresAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "pickcode"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_direct_links_expiresAt",
+            "unique": false,
+            "columnNames": [
+              "expiresAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_direct_links_expiresAt` ON `${TABLE_NAME}` (`expiresAt`)"
+          }
+        ]
+      },
+      {
+        "tableName": "playback_progress",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`mediaKey` TEXT NOT NULL, `positionMs` INTEGER NOT NULL, `durationMs` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`mediaKey`))",
+        "fields": [
+          {
+            "fieldPath": "mediaKey",
+            "columnName": "mediaKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "positionMs",
+            "columnName": "positionMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationMs",
+            "columnName": "durationMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "mediaKey"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_playback_progress_updatedAt",
+            "unique": false,
+            "columnNames": [
+              "updatedAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_playback_progress_updatedAt` ON `${TABLE_NAME}` (`updatedAt`)"
+          }
+        ]
+      },
+      {
+        "tableName": "cloud_strm_records",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`pickcode` TEXT NOT NULL, `source` TEXT NOT NULL, `fileName` TEXT NOT NULL, `movieNumber` TEXT, `variant` TEXT, `partLabel` TEXT, `strmUri` TEXT NOT NULL, `libraryRootUri` TEXT, `movieId` INTEGER, `videoSizeBytes` INTEGER, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`pickcode`))",
+        "fields": [
+          {
+            "fieldPath": "pickcode",
+            "columnName": "pickcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileName",
+            "columnName": "fileName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "movieNumber",
+            "columnName": "movieNumber",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "variant",
+            "columnName": "variant",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "partLabel",
+            "columnName": "partLabel",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "strmUri",
+            "columnName": "strmUri",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "libraryRootUri",
+            "columnName": "libraryRootUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "movieId",
+            "columnName": "movieId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "videoSizeBytes",
+            "columnName": "videoSizeBytes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "pickcode"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_cloud_strm_records_movieNumber",
+            "unique": false,
+            "columnNames": [
+              "movieNumber"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_cloud_strm_records_movieNumber` ON `${TABLE_NAME}` (`movieNumber`)"
+          },
+          {
+            "name": "index_cloud_strm_records_libraryRootUri",
+            "unique": false,
+            "columnNames": [
+              "libraryRootUri"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_cloud_strm_records_libraryRootUri` ON `${TABLE_NAME}` (`libraryRootUri`)"
+          },
+          {
+            "name": "index_cloud_strm_records_movieId",
+            "unique": false,
+            "columnNames": [
+              "movieId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_cloud_strm_records_movieId` ON `${TABLE_NAME}` (`movieId`)"
+          },
+          {
+            "name": "index_cloud_strm_records_movieNumber_partLabel_variant_fileName",
+            "unique": false,
+            "columnNames": [
+              "movieNumber",
+              "partLabel",
+              "variant",
+              "fileName"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_cloud_strm_records_movieNumber_partLabel_variant_fileName` ON `${TABLE_NAME}` (`movieNumber`, `partLabel`, `variant`, `fileName`)"
+          }
+        ]
+      },
+      {
+        "tableName": "cloud_folder_batch_tasks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `folderCid` INTEGER NOT NULL, `folderName` TEXT NOT NULL, `status` TEXT NOT NULL, `currentPath` TEXT, `currentFileName` TEXT, `queuedVideos` INTEGER NOT NULL, `processedVideos` INTEGER NOT NULL, `addedVideos` INTEGER NOT NULL, `scrapeFailedVideos` INTEGER NOT NULL, `skippedVideos` INTEGER NOT NULL, `failedVideos` INTEGER NOT NULL, `failedFolders` INTEGER NOT NULL, `failureMessage` TEXT, `processedPickcodesCsv` TEXT NOT NULL, `lastProgressAt` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "folderCid",
+            "columnName": "folderCid",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "folderName",
+            "columnName": "folderName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentPath",
+            "columnName": "currentPath",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "currentFileName",
+            "columnName": "currentFileName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "queuedVideos",
+            "columnName": "queuedVideos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "processedVideos",
+            "columnName": "processedVideos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "addedVideos",
+            "columnName": "addedVideos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scrapeFailedVideos",
+            "columnName": "scrapeFailedVideos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "skippedVideos",
+            "columnName": "skippedVideos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failedVideos",
+            "columnName": "failedVideos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failedFolders",
+            "columnName": "failedFolders",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failureMessage",
+            "columnName": "failureMessage",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "processedPickcodesCsv",
+            "columnName": "processedPickcodesCsv",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastProgressAt",
+            "columnName": "lastProgressAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_cloud_folder_batch_tasks_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_cloud_folder_batch_tasks_status` ON `${TABLE_NAME}` (`status`)"
+          },
+          {
+            "name": "index_cloud_folder_batch_tasks_folderCid",
+            "unique": false,
+            "columnNames": [
+              "folderCid"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_cloud_folder_batch_tasks_folderCid` ON `${TABLE_NAME}` (`folderCid`)"
+          },
+          {
+            "name": "index_cloud_folder_batch_tasks_updatedAt",
+            "unique": false,
+            "columnNames": [
+              "updatedAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_cloud_folder_batch_tasks_updatedAt` ON `${TABLE_NAME}` (`updatedAt`)"
+          }
+        ]
+      },
+      {
+        "tableName": "cloud_video_tasks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`pickcode` TEXT NOT NULL, `fileName` TEXT NOT NULL, `cid` INTEGER, `fid` INTEGER, `size` INTEGER, `addedAt` INTEGER, `modifiedAt` INTEGER, `forceDistinct` INTEGER NOT NULL, `status` TEXT NOT NULL, `failureReason` TEXT, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`pickcode`))",
+        "fields": [
+          {
+            "fieldPath": "pickcode",
+            "columnName": "pickcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileName",
+            "columnName": "fileName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cid",
+            "columnName": "cid",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "fid",
+            "columnName": "fid",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "size",
+            "columnName": "size",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "addedAt",
+            "columnName": "addedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "modifiedAt",
+            "columnName": "modifiedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "forceDistinct",
+            "columnName": "forceDistinct",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failureReason",
+            "columnName": "failureReason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "pickcode"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_cloud_video_tasks_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_cloud_video_tasks_status` ON `${TABLE_NAME}` (`status`)"
+          },
+          {
+            "name": "index_cloud_video_tasks_createdAt",
+            "unique": false,
+            "columnNames": [
+              "createdAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_cloud_video_tasks_createdAt` ON `${TABLE_NAME}` (`createdAt`)"
+          },
+          {
+            "name": "index_cloud_video_tasks_updatedAt",
+            "unique": false,
+            "columnNames": [
+              "updatedAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_cloud_video_tasks_updatedAt` ON `${TABLE_NAME}` (`updatedAt`)"
+          }
+        ]
+      },
+      {
+        "tableName": "guangya_direct_links",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`fileId` TEXT NOT NULL, `url` TEXT NOT NULL, `expiresAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`fileId`))",
+        "fields": [
+          {
+            "fieldPath": "fileId",
+            "columnName": "fileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expiresAt",
+            "columnName": "expiresAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "fileId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_guangya_direct_links_expiresAt",
+            "unique": false,
+            "columnNames": [
+              "expiresAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_guangya_direct_links_expiresAt` ON `${TABLE_NAME}` (`expiresAt`)"
+          }
+        ]
+      },
+      {
+        "tableName": "movie_field_provenance",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`movieId` INTEGER NOT NULL, `fieldKey` TEXT NOT NULL, `authority` TEXT NOT NULL, `sourceLabel` TEXT NOT NULL, `confidence` REAL NOT NULL, `valuePreview` TEXT, `updatedAtMillis` INTEGER NOT NULL, PRIMARY KEY(`movieId`, `fieldKey`))",
+        "fields": [
+          {
+            "fieldPath": "movieId",
+            "columnName": "movieId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fieldKey",
+            "columnName": "fieldKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authority",
+            "columnName": "authority",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceLabel",
+            "columnName": "sourceLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "confidence",
+            "columnName": "confidence",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "valuePreview",
+            "columnName": "valuePreview",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updatedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "movieId",
+            "fieldKey"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_movie_field_provenance_movieId",
+            "unique": false,
+            "columnNames": [
+              "movieId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_movie_field_provenance_movieId` ON `${TABLE_NAME}` (`movieId`)"
+          },
+          {
+            "name": "index_movie_field_provenance_fieldKey",
+            "unique": false,
+            "columnNames": [
+              "fieldKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_movie_field_provenance_fieldKey` ON `${TABLE_NAME}` (`fieldKey`)"
+          },
+          {
+            "name": "index_movie_field_provenance_updatedAtMillis",
+            "unique": false,
+            "columnNames": [
+              "updatedAtMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_movie_field_provenance_updatedAtMillis` ON `${TABLE_NAME}` (`updatedAtMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "entity_aliases",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`kind` TEXT NOT NULL, `normalizedKey` TEXT NOT NULL, `displayName` TEXT NOT NULL, `canonicalKey` TEXT NOT NULL, `sourceLabel` TEXT NOT NULL, `updatedAtMillis` INTEGER NOT NULL, PRIMARY KEY(`kind`, `normalizedKey`))",
+        "fields": [
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "normalizedKey",
+            "columnName": "normalizedKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "displayName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "canonicalKey",
+            "columnName": "canonicalKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceLabel",
+            "columnName": "sourceLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updatedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "kind",
+            "normalizedKey"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_entity_aliases_kind",
+            "unique": false,
+            "columnNames": [
+              "kind"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_entity_aliases_kind` ON `${TABLE_NAME}` (`kind`)"
+          },
+          {
+            "name": "index_entity_aliases_canonicalKey",
+            "unique": false,
+            "columnNames": [
+              "canonicalKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_entity_aliases_canonicalKey` ON `${TABLE_NAME}` (`canonicalKey`)"
+          },
+          {
+            "name": "index_entity_aliases_updatedAtMillis",
+            "unique": false,
+            "columnNames": [
+              "updatedAtMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_entity_aliases_updatedAtMillis` ON `${TABLE_NAME}` (`updatedAtMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "source_health",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`source` TEXT NOT NULL, `consecutiveFailures` INTEGER NOT NULL, `coolingUntilMillis` INTEGER NOT NULL, `lastFailureKind` TEXT, `lastFailureMessage` TEXT, `lastSuccessAtMillis` INTEGER NOT NULL, `updatedAtMillis` INTEGER NOT NULL, PRIMARY KEY(`source`))",
+        "fields": [
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "consecutiveFailures",
+            "columnName": "consecutiveFailures",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coolingUntilMillis",
+            "columnName": "coolingUntilMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastFailureKind",
+            "columnName": "lastFailureKind",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastFailureMessage",
+            "columnName": "lastFailureMessage",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSuccessAtMillis",
+            "columnName": "lastSuccessAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updatedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "source"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_source_health_coolingUntilMillis",
+            "unique": false,
+            "columnNames": [
+              "coolingUntilMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_source_health_coolingUntilMillis` ON `${TABLE_NAME}` (`coolingUntilMillis`)"
+          },
+          {
+            "name": "index_source_health_updatedAtMillis",
+            "unique": false,
+            "columnNames": [
+              "updatedAtMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_source_health_updatedAtMillis` ON `${TABLE_NAME}` (`updatedAtMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "task_runs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `kind` TEXT NOT NULL, `dedupeKey` TEXT NOT NULL, `title` TEXT NOT NULL, `state` TEXT NOT NULL, `step` TEXT, `completedSteps` INTEGER NOT NULL, `totalSteps` INTEGER NOT NULL, `attempts` INTEGER NOT NULL, `failureMessage` TEXT, `ownerToken` TEXT, `startedAtMillis` INTEGER NOT NULL, `lastHeartbeatAtMillis` INTEGER NOT NULL, `updatedAtMillis` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dedupeKey",
+            "columnName": "dedupeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "step",
+            "columnName": "step",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "completedSteps",
+            "columnName": "completedSteps",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalSteps",
+            "columnName": "totalSteps",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attempts",
+            "columnName": "attempts",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failureMessage",
+            "columnName": "failureMessage",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "ownerToken",
+            "columnName": "ownerToken",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "startedAtMillis",
+            "columnName": "startedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastHeartbeatAtMillis",
+            "columnName": "lastHeartbeatAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updatedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_task_runs_dedupeKey",
+            "unique": false,
+            "columnNames": [
+              "dedupeKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_task_runs_dedupeKey` ON `${TABLE_NAME}` (`dedupeKey`)"
+          },
+          {
+            "name": "index_task_runs_state",
+            "unique": false,
+            "columnNames": [
+              "state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_task_runs_state` ON `${TABLE_NAME}` (`state`)"
+          },
+          {
+            "name": "index_task_runs_kind",
+            "unique": false,
+            "columnNames": [
+              "kind"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_task_runs_kind` ON `${TABLE_NAME}` (`kind`)"
+          },
+          {
+            "name": "index_task_runs_updatedAtMillis",
+            "unique": false,
+            "columnNames": [
+              "updatedAtMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_task_runs_updatedAtMillis` ON `${TABLE_NAME}` (`updatedAtMillis`)"
+          },
+          {
+            "name": "index_task_runs_lastHeartbeatAtMillis",
+            "unique": false,
+            "columnNames": [
+              "lastHeartbeatAtMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_task_runs_lastHeartbeatAtMillis` ON `${TABLE_NAME}` (`lastHeartbeatAtMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "local_subtitle_library",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `uri` TEXT NOT NULL, `fileName` TEXT NOT NULL, `relativePath` TEXT NOT NULL, `ext` TEXT NOT NULL, `movieNumber` TEXT, `sizeBytes` INTEGER NOT NULL, `lastModified` INTEGER NOT NULL, `libraryRootUri` TEXT NOT NULL, `indexedAt` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uri",
+            "columnName": "uri",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileName",
+            "columnName": "fileName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relativePath",
+            "columnName": "relativePath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ext",
+            "columnName": "ext",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "movieNumber",
+            "columnName": "movieNumber",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "sizeBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastModified",
+            "columnName": "lastModified",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "libraryRootUri",
+            "columnName": "libraryRootUri",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "indexedAt",
+            "columnName": "indexedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_local_subtitle_library_uri",
+            "unique": true,
+            "columnNames": [
+              "uri"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_local_subtitle_library_uri` ON `${TABLE_NAME}` (`uri`)"
+          },
+          {
+            "name": "index_local_subtitle_library_movieNumber",
+            "unique": false,
+            "columnNames": [
+              "movieNumber"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_local_subtitle_library_movieNumber` ON `${TABLE_NAME}` (`movieNumber`)"
+          },
+          {
+            "name": "index_local_subtitle_library_libraryRootUri",
+            "unique": false,
+            "columnNames": [
+              "libraryRootUri"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_local_subtitle_library_libraryRootUri` ON `${TABLE_NAME}` (`libraryRootUri`)"
+          },
+          {
+            "name": "index_local_subtitle_library_fileName",
+            "unique": false,
+            "columnNames": [
+              "fileName"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_local_subtitle_library_fileName` ON `${TABLE_NAME}` (`fileName`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f16be2af20325765f91975f7fdb5683c')"
+    ]
+  }
+}

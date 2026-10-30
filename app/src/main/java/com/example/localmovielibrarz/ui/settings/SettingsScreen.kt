@@ -8,6 +8,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -87,6 +88,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -459,7 +462,9 @@ fun SettingsScreen(
                         uiState = uiState,
                         onExternalSubtitleFontSizeChange = viewModel::updateExternalSubtitleFontSizeSp,
                         onExternalSubtitleBottomPaddingChange = viewModel::updateExternalSubtitleBottomPaddingPercent,
-                        onExternalSubtitleBackgroundAlphaChange = viewModel::updateExternalSubtitleBackgroundAlphaPercent
+                        onExternalSubtitleBackgroundAlphaChange = viewModel::updateExternalSubtitleBackgroundAlphaPercent,
+                        onExternalSubtitleFontFamilyChange = viewModel::updateExternalSubtitleFontFamily,
+                        onExternalSubtitleTextColorChange = viewModel::updateExternalSubtitleTextColor
                     )
 
                     SettingsPage.PlayerSubtitleLibrary -> LocalSubtitleLibrarySettingsPage(
@@ -1064,7 +1069,7 @@ private fun SettingsOverviewPage(
     SettingsGroupCard(title = "播放器") {
         SettingsEntryRow(
             title = "播放器设置",
-            subtitle = "外挂字幕字号 ${uiState.externalSubtitleFontSizeSp}sp · 位置 ${uiState.externalSubtitleBottomPaddingPercent}%",
+            subtitle = "外挂字幕 ${uiState.externalSubtitleFontSizeSp}sp · ${externalSubtitleFontLabel(uiState.externalSubtitleFontFamily)} · ${externalSubtitleColorLabel(uiState.externalSubtitleTextColor)} · 位置 ${uiState.externalSubtitleBottomPaddingPercent}%",
             onClick = { onOpenPage(SettingsPage.Player) }
         )
     }
@@ -1252,7 +1257,7 @@ private fun PlayerSettingsPage(
     SettingsGroupCard(title = "样式与预览") {
         SettingsEntryRow(
             title = "外挂字幕",
-            subtitle = "字号 ${uiState.externalSubtitleFontSizeSp}sp · 点击进入实时预览",
+            subtitle = "字号 ${uiState.externalSubtitleFontSizeSp}sp · ${externalSubtitleFontLabel(uiState.externalSubtitleFontFamily)} · ${externalSubtitleColorLabel(uiState.externalSubtitleTextColor)} · 点击进入实时预览",
             onClick = onOpenSubtitle
         )
         SettingsEntryRow(
@@ -1539,7 +1544,9 @@ private fun ExternalSubtitleSettingsPage(
     uiState: SettingsUiState,
     onExternalSubtitleFontSizeChange: (Int) -> Unit,
     onExternalSubtitleBottomPaddingChange: (Int) -> Unit,
-    onExternalSubtitleBackgroundAlphaChange: (Int) -> Unit
+    onExternalSubtitleBackgroundAlphaChange: (Int) -> Unit,
+    onExternalSubtitleFontFamilyChange: (String) -> Unit,
+    onExternalSubtitleTextColorChange: (Int) -> Unit
 ) {
     SettingsSectionTitle("实时预览")
     SubtitleStylePreview(uiState)
@@ -1566,6 +1573,105 @@ private fun ExternalSubtitleSettingsPage(
             valueText = "${uiState.externalSubtitleBackgroundAlphaPercent}%",
             onValueChange = onExternalSubtitleBackgroundAlphaChange
         )
+        // §5.2-8：字体族与文字颜色。为什么不给「任意字体文件导入」：外挂字幕走
+        // media3 的 SubtitleView，它只认系统字体族，第三方 .ttf 得先注册到 Resources
+        // 才能被 Typeface.create 解析；而对本项目的主要场景（看番/看电影）来说，
+        // 系统族 + 6 档常用色的收益/成本比明显高于引入字体文件管理。
+        SubtitleStyleChoiceRow(
+            title = "字体",
+            options = AppSettingsRepository.EXTERNAL_SUBTITLE_FONT_FAMILIES,
+            labels = AppSettingsRepository.EXTERNAL_SUBTITLE_FONT_FAMILY_LABELS,
+            selected = uiState.externalSubtitleFontFamily,
+            onSelect = onExternalSubtitleFontFamilyChange
+        )
+        SubtitleStyleColorRow(
+            title = "文字颜色",
+            colors = AppSettingsRepository.EXTERNAL_SUBTITLE_TEXT_COLORS,
+            labels = AppSettingsRepository.EXTERNAL_SUBTITLE_TEXT_COLOR_LABELS,
+            selected = uiState.externalSubtitleTextColor,
+            onSelect = onExternalSubtitleTextColorChange
+        )
+    }
+}
+
+/**
+ * 单选行（字体族用）。选项少且互斥，用 chips 而不是下拉：下拉在设置页里要点两次，
+ * 而这里改动要立刻在预览区看到效果，两次点击会让「调一调看看」的反馈循环变长。
+ */
+@Composable
+private fun SubtitleStyleChoiceRow(
+    title: String,
+    options: List<String>,
+    labels: List<String>,
+    selected: String,
+    onSelect: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = title,
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold
+        )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.forEachIndexed { index, value ->
+                val isSelected = value == selected
+                Text(
+                    text = labels.getOrElse(index) { value },
+                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .background(
+                            if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                            AppRadius.SM
+                        )
+                        .clickable { onSelect(value) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
+        }
+    }
+}
+
+/** 色板行（文字颜色用）。选中态用外圈描边表示，而不是加一号色块——加号会挤动整行。 */
+@Composable
+private fun SubtitleStyleColorRow(
+    title: String,
+    colors: List<Int>,
+    labels: List<String>,
+    selected: Int,
+    onSelect: (Int) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = title,
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold
+        )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            colors.forEachIndexed { index, argb ->
+                val isSelected = argb == selected
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(Color(argb), CircleShape)
+                        .border(
+                            width = if (isSelected) 3.dp else 1.dp,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                            shape = CircleShape
+                        )
+                        .clickable { onSelect(argb) }
+                        .semantics { contentDescription = labels.getOrElse(index) { "颜色$index" } }
+                )
+            }
+        }
     }
 }
 
@@ -1895,14 +2001,47 @@ private fun SubtitleStylePreview(uiState: SettingsUiState) {
         Box(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, AppRadius.LG).padding(16.dp).heightIn(min = 180.dp), contentAlignment = Alignment.BottomCenter) {
             Text(
                 text = "这是一段外挂字幕预览",
-                color = MaterialTheme.colorScheme.onSurface,
+                // §5.2-8：预览区必须吃真实设置，否则「设置页看着对、播放页不对」——
+                // 这类偏差是本工程历史上最容易反复的一类问题（见 LutSettings 的统一口径注释）。
+                color = Color(uiState.externalSubtitleTextColor),
                 fontSize = uiState.externalSubtitleFontSizeSp.sp,
+                fontFamily = resolvePreviewFontFamily(uiState.externalSubtitleFontFamily),
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 modifier = Modifier.background(background, AppRadius.XS).padding(horizontal = 8.dp, vertical = 3.dp).padding(bottom = uiState.externalSubtitleBottomPaddingPercent.dp)
             )
         }
     }
 }
+
+/**
+ * 入口摘要用的字体族中文名。设置页入口只有一行宽，族名直接显示 "sans-serif-condensed"
+ * 这类英文标识会撑破行宽并和其它摘要项对不齐；所以走同一张候选表反查中文标签。
+ * 查不到（存量配置里的未知值）时回落候选表首个中文名，而不是显示原始英文串。
+ */
+private fun externalSubtitleFontLabel(family: String): String {
+    val index = AppSettingsRepository.EXTERNAL_SUBTITLE_FONT_FAMILIES.indexOf(family)
+    return AppSettingsRepository.EXTERNAL_SUBTITLE_FONT_FAMILY_LABELS.getOrElse(
+        if (index >= 0) index else 0
+    ) { "系统默认" }
+}
+
+/** 入口摘要用的颜色中文名；未知 ARGB 同样回落首项（白），避免摘要里出现 #AARRGGBB。 */
+private fun externalSubtitleColorLabel(argb: Int): String {
+    val index = AppSettingsRepository.EXTERNAL_SUBTITLE_TEXT_COLORS.indexOf(argb)
+    return AppSettingsRepository.EXTERNAL_SUBTITLE_TEXT_COLOR_LABELS.getOrElse(
+        if (index >= 0) index else 0
+    ) { "白色" }
+}
+
+/** 预览区的字体族解析：与播放页 resolveExternalSubtitleTypeface 保持同一映射口径。 */
+private fun resolvePreviewFontFamily(family: String): androidx.compose.ui.text.font.FontFamily =
+    when (family) {
+        "sans-serif" -> androidx.compose.ui.text.font.FontFamily.SansSerif
+        "serif" -> androidx.compose.ui.text.font.FontFamily.Serif
+        "monospace" -> androidx.compose.ui.text.font.FontFamily.Monospace
+        "sans-serif-light", "sans-serif-condensed" -> androidx.compose.ui.text.font.FontFamily.SansSerif
+        else -> androidx.compose.ui.text.font.FontFamily.Default
+    }
 
 @Composable
 private fun SubtitleStyleSliderRow(
