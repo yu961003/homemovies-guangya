@@ -778,119 +778,6 @@ class AppSettingsRepository(context: Context) {
         saveCloudExcludedVideoNames(getCloudExcludedVideoNames() - name)
     }
 
-    // ---------------- 共享清理名单（需求 3 / 需求 13.3 共用，115 与光鸭） ----------------
-
-    /** 关键词组：按文件名包含匹配。默认预置"不大.txt"脚本 pA/hA 广告词列表。 */
-    fun getCloudCleanKeywords(): Set<String> =
-        (prefs.getStringSet(KEY_CLOUD_CLEAN_KEYWORDS, null) ?: DEFAULT_CLOUD_CLEAN_KEYWORDS)
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .toSet()
-
-    fun saveCloudCleanKeywords(keywords: Set<String>) {
-        prefs.edit()
-            .putStringSet(KEY_CLOUD_CLEAN_KEYWORDS, keywords.map { it.trim() }.filter { it.isNotBlank() }.toSet())
-            .apply()
-    }
-
-    fun addCloudCleanKeyword(keyword: String) {
-        val cleaned = keyword.trim()
-        if (cleaned.isBlank()) return
-        saveCloudCleanKeywords(getCloudCleanKeywords() + cleaned)
-    }
-
-    fun removeCloudCleanKeyword(keyword: String) {
-        saveCloudCleanKeywords(getCloudCleanKeywords() - keyword)
-    }
-
-    /** 后缀组：按扩展名匹配（不带点号，如 txt）。默认"不大.txt" fA 默认组。 */
-    fun getCloudCleanSuffixes(): Set<String> =
-        (prefs.getStringSet(KEY_CLOUD_CLEAN_SUFFIXES, null) ?: DEFAULT_CLOUD_CLEAN_SUFFIXES)
-            .map { it.trim().lowercase() }
-            .filter { it.isNotBlank() }
-            .toSet()
-
-    fun saveCloudCleanSuffixes(suffixes: Set<String>) {
-        prefs.edit()
-            .putStringSet(
-                KEY_CLOUD_CLEAN_SUFFIXES,
-                suffixes.map { it.trim().lowercase() }.filter { it.isNotBlank() }.toSet()
-            )
-            .apply()
-    }
-
-    fun addCloudCleanSuffix(suffix: String) {
-        val cleaned = suffix.trim().removePrefix(".").lowercase()
-        if (cleaned.isBlank()) return
-        saveCloudCleanSuffixes(getCloudCleanSuffixes() + cleaned)
-    }
-
-    fun removeCloudCleanSuffix(suffix: String) {
-        saveCloudCleanSuffixes(getCloudCleanSuffixes() - suffix.trim().removePrefix(".").lowercase())
-    }
-
-    // ---------------- 清理名单批量导入（第四轮：TXT 批量导入） ----------------
-
-    /** 批量添加关键词（已清洗去重），返回新增条数。 */
-    fun addCloudCleanKeywords(rawKeywords: List<String>): Int {
-        val cleaned = rawKeywords.map { it.trim().trim('"', '「', '」') }
-            .filter { it.isNotBlank() }
-            .toSet()
-        if (cleaned.isEmpty()) return 0
-        val existing = getCloudCleanKeywords()
-        val added = cleaned - existing
-        if (added.isNotEmpty()) saveCloudCleanKeywords(existing + added)
-        return added.size
-    }
-
-    /** 批量添加后缀（去前导点 + 小写化，trim 去引号对齐关键词），返回新增条数。 */
-    fun addCloudCleanSuffixes(rawSuffixes: List<String>): Int {
-        val cleaned = rawSuffixes.map { it.trim().trim('"', '「', '」').removePrefix(".").lowercase() }
-            .filter { it.isNotBlank() }
-            .toSet()
-        if (cleaned.isEmpty()) return 0
-        val existing = getCloudCleanSuffixes()
-        val added = cleaned - existing
-        if (added.isNotEmpty()) saveCloudCleanSuffixes(existing + added)
-        return added.size
-    }
-
-    /** 大小阈值（MB），对后缀命中的文件生效；0 表示不限制大小。默认 5MB。 */
-    fun getCloudCleanMaxSizeMb(): Int =
-        prefs.getInt(KEY_CLOUD_CLEAN_MAX_SIZE_MB, DEFAULT_CLOUD_CLEAN_MAX_SIZE_MB).coerceIn(0, 10240)
-
-    fun saveCloudCleanMaxSizeMb(value: Int) {
-        prefs.edit().putInt(KEY_CLOUD_CLEAN_MAX_SIZE_MB, value.coerceIn(0, 10240)).apply()
-    }
-
-    // ---------------- 清理条件开关（关键词 / 后缀，双亮 = 同时命中） ----------------
-
-    // 关键词开关默认 false——默认关键词组是空集（DEFAULT_CLOUD_CLEAN_KEYWORDS），
-    // 若默认点亮，新用户首扫必被「关键词组为空」拦截；默认「只亮后缀」恰好等价于修复前的默认行为
-    // （关键词组为空时 OR 退化为后缀匹配）。用户添加关键词后自行点亮即可。
-    fun isCloudCleanKeywordEnabled(): Boolean =
-        prefs.getBoolean(KEY_CLOUD_CLEAN_KEYWORD_ENABLED, false)
-
-    fun saveCloudCleanKeywordEnabled(value: Boolean) {
-        prefs.edit().putBoolean(KEY_CLOUD_CLEAN_KEYWORD_ENABLED, value).apply()
-    }
-
-    fun isCloudCleanSuffixEnabled(): Boolean =
-        prefs.getBoolean(KEY_CLOUD_CLEAN_SUFFIX_ENABLED, true)
-
-    fun saveCloudCleanSuffixEnabled(value: Boolean) {
-        prefs.edit().putBoolean(KEY_CLOUD_CLEAN_SUFFIX_ENABLED, value).apply()
-    }
-
-    /** 恢复脚本内置默认清理设置。 */
-    fun resetCloudCleanDefaults() {
-        prefs.edit()
-            .remove(KEY_CLOUD_CLEAN_KEYWORDS)
-            .remove(KEY_CLOUD_CLEAN_SUFFIXES)
-            .remove(KEY_CLOUD_CLEAN_MAX_SIZE_MB)
-            .apply()
-    }
-
     // ---------------- 批量重命名模板 V2（全操作类型） ----------------
 
     fun getGuangyaBatchRenameTemplates(): List<String> =
@@ -1459,13 +1346,6 @@ class AppSettingsRepository(context: Context) {
         const val KEY_CLOUD_DELETE_ENABLED = "cloud_delete_enabled"
         const val KEY_CLOUD_EXCLUDED_VIDEO_NAMES = "cloud_excluded_video_names"
         const val KEY_CLOUD_SCRAPE_SKIP_BELOW_SIZE_MB = "cloud_scrape_skip_below_size_mb"
-        // 共享清理名单（需求 3 / 需求 13.3，115 与光鸭共用）
-        const val KEY_CLOUD_CLEAN_KEYWORDS = "cloud_clean_keywords"
-        const val KEY_CLOUD_CLEAN_SUFFIXES = "cloud_clean_suffixes"
-        const val KEY_CLOUD_CLEAN_MAX_SIZE_MB = "cloud_clean_max_size_mb"
-        // 清理条件开关（关键词 / 后缀，双亮 = 同时命中）
-        const val KEY_CLOUD_CLEAN_KEYWORD_ENABLED = "cloud_clean_keyword_enabled"
-        const val KEY_CLOUD_CLEAN_SUFFIX_ENABLED = "cloud_clean_suffix_enabled"
         const val KEY_GUANGYA_BATCH_RENAME_TEMPLATES = "guangya_batch_rename_templates_v2"
         const val KEY_EXTERNAL_SUBTITLE_FONT_SIZE_SP = "external_subtitle_font_size_sp"
         const val KEY_LIGHT_THEME_ENABLED = "light_theme_enabled"
@@ -1623,11 +1503,6 @@ class AppSettingsRepository(context: Context) {
         const val MAX_EXTERNAL_SUBTITLE_OFFSET_MS = 600_000L
         private const val NOMEDIA_FILE_NAME = ".nomedia"
         private const val NOMEDIA_TEMP_FILE_NAME = "nomedia.tmp"
-        // 共享清理名单默认值（占位）。后缀组/大小阈值已有合理默认；
-        // DEFAULT_CLOUD_CLEAN_KEYWORDS 建议补全"不大.txt"脚本 pA/hA 广告词列表（见助手说明）。
-        val DEFAULT_CLOUD_CLEAN_KEYWORDS = setOf<String>()
-        val DEFAULT_CLOUD_CLEAN_SUFFIXES = setOf("txt", "url", "html", "htm", "mht")
-        const val DEFAULT_CLOUD_CLEAN_MAX_SIZE_MB = 50
         // 占位；真实排除项由用户在设置页录入（getCloudExcludedVideoNames 保留「空默认 + 用户自定义」合并语义）
         val DEFAULT_CLOUD_EXCLUDED_VIDEO_NAMES = setOf<String>()
     }

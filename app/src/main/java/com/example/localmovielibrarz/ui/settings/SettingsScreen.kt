@@ -168,8 +168,7 @@ fun SettingsScreen(
     openScrapeTasksPage: Boolean = false,
     openUpdatePage: Boolean = false,
     onBack: (() -> Unit)? = null,
-    onOpenGuangyaBrowser: () -> Unit = {},
-    onOpenCloudClean: () -> Unit = {}
+    onOpenGuangyaBrowser: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -356,8 +355,7 @@ fun SettingsScreen(
                     SettingsPage.Cloud -> CloudSettingsPage(
                         uiState = uiState,
                         guangyaLoginViewModel = guangyaLoginViewModel,
-                        onOpenGuangyaBrowser = onOpenGuangyaBrowser,
-                        onOpenCloudClean = onOpenCloudClean,
+                        onOpenGuangyaBrowser = onOpenGuangyaBrowser
                         onCloud115AppSelected = viewModel::selectCloud115LoginApp,
                         onSavedCloud115AccountSelected = viewModel::applySavedCloud115Account,
                         onSavedCloud115AccountDelete = viewModel::deleteSavedCloud115Account,
@@ -2066,7 +2064,6 @@ private fun CloudSettingsPage(
     uiState: SettingsUiState,
     guangyaLoginViewModel: GuangyaLoginViewModel,
     onOpenGuangyaBrowser: () -> Unit,
-    onOpenCloudClean: () -> Unit = {},
     onCloud115AppSelected: (Cloud115LoginApp) -> Unit,
     onSavedCloud115AccountSelected: (SavedCloud115Account) -> Unit,
     onSavedCloud115AccountDelete: (SavedCloud115Account) -> Unit,
@@ -2098,13 +2095,6 @@ private fun CloudSettingsPage(
         shape = AppRadius.LG
     ) {
         Text("浏览光鸭网盘 / 生成 STRM")
-    }
-    OutlinedButton(
-        onClick = onOpenCloudClean,
-        modifier = Modifier.fillMaxWidth(),
-        shape = AppRadius.LG
-    ) {
-        Text("115 清理工具")
     }
     SettingsSectionTitle("网盘添加")
     CloudAddBehaviorPanel(

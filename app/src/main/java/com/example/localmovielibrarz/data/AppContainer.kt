@@ -33,7 +33,6 @@ import com.example.localmovielibrarz.data.repository.StrmScrapeRepository
 import com.example.localmovielibrarz.data.repository.UsageStatsRepository
 import com.example.localmovielibrarz.cloudguangya.GuangyaApiClient
 import com.example.localmovielibrarz.cloudguangya.GuangyaBrowserRepository
-import com.example.localmovielibrarz.cloudguangya.GuangyaCleanExecutor
 import com.example.localmovielibrarz.cloudguangya.GuangyaLoginClient
 import com.example.localmovielibrarz.cloudguangya.GuangyaOfflineMemory
 import com.example.localmovielibrarz.cloudguangya.GuangyaOfflineSubmitter
@@ -150,8 +149,6 @@ class AppContainer(context: Context) {
     val guangyaBrowserRepository by lazy { GuangyaBrowserRepository(guangyaApiClient) }
     val guangyaOfflineMemory by lazy { GuangyaOfflineMemory(appContext) }
     val guangyaOfflineSubmitter by lazy { GuangyaOfflineSubmitter(guangyaBrowserRepository, guangyaOfflineMemory) }
-    /** 第四轮：大批量清理执行器（应用级单例，跨页面存活）。 */
-    val guangyaCleanExecutor by lazy { GuangyaCleanExecutor(guangyaBrowserRepository) }
     val guangyaDirectLinkResolver by lazy {
         GuangyaDirectLinkResolver(
             dao = database.guangyaDirectLinkDao(),

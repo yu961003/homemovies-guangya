@@ -67,10 +67,6 @@ import com.example.localmovielibrarz.data.AppContainer
 import com.example.localmovielibrarz.data.repository.AppUpdateInfo
 import com.example.localmovielibrarz.ui.cloud.CloudBrowserScreen
 import com.example.localmovielibrarz.ui.cloud.CloudBrowserViewModel
-import com.example.localmovielibrarz.ui.cloudclean.CloudCleanScreen
-import com.example.localmovielibrarz.ui.cloudclean.CloudCleanViewModel
-import com.example.localmovielibrarz.ui.cloudclean.CloudEmptyFolderScreen
-import com.example.localmovielibrarz.ui.cloudclean.CloudEmptyFolderViewModel
 import com.example.localmovielibrarz.ui.detail.DetailScreen
 import com.example.localmovielibrarz.ui.detail.DetailViewModel
 import com.example.localmovielibrarz.ui.favorites.FavoritesScreen
@@ -79,10 +75,6 @@ import com.example.localmovielibrarz.ui.filter.FilterResultScreen
 import com.example.localmovielibrarz.ui.filter.FilterResultViewModel
 import com.example.localmovielibrarz.ui.guangya.GuangyaBrowserScreen
 import com.example.localmovielibrarz.ui.guangya.GuangyaBrowserViewModel
-import com.example.localmovielibrarz.ui.guangya.tools.GuangyaEmptyFolderCleanerScreen
-import com.example.localmovielibrarz.ui.guangya.tools.GuangyaEmptyFolderCleanerViewModel
-import com.example.localmovielibrarz.ui.guangya.tools.GuangyaFileCleanerScreen
-import com.example.localmovielibrarz.ui.guangya.tools.GuangyaFileCleanerViewModel
 import com.example.localmovielibrarz.ui.home.HomeScreen
 import com.example.localmovielibrarz.ui.home.HomeImageMode
 import com.example.localmovielibrarz.ui.home.HomeViewModel
@@ -322,11 +314,7 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                                             },
                                             onMovieAdded = { },
                                             topInsetHandled = true,
-                                            backEnabled = pagerState.currentPage == 0, // ★ E-1：仅当前页接管返回
-                                            onOpenCloudClean = { navController.navigate(Route.CloudClean) },
-                                            onOpenEmptyCleaner = { rootCid, rootName ->
-                                                navController.navigate(Route.cloudEmptyCleaner(rootCid, rootName))
-                                            }
+                                            backEnabled = pagerState.currentPage == 0 // ★ E-1：仅当前页接管返回
                                         )
                                     }
 
@@ -350,13 +338,7 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                                                 playNav("guangya://guangya_res/${item.fileId}", item.name, item.name)
                                             },
                                             topInsetHandled = true,
-                                            backEnabled = pagerState.currentPage == 1, // ★ E-1：仅当前页接管返回
-                                            onOpenFileCleaner = { parentId, rootName ->
-                                                navController.navigate(Route.guangyaFileCleaner(parentId, rootName))
-                                            },
-                                            onOpenEmptyFolderCleaner = { rootParentId, rootName ->
-                                                navController.navigate(Route.guangyaEmptyFolderCleaner(rootParentId, rootName))
-                                            }
+                                            backEnabled = pagerState.currentPage == 1 // ★ E-1：仅当前页接管返回
                                         )
                                     }
                                 }
@@ -390,89 +372,7 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                         onBack = { navController.popBackStack() },
                         onPlayVideo = { item ->
                             playNav("guangya://guangya_res/${item.fileId}", item.name, item.name)
-                        },
-                        onOpenFileCleaner = { parentId, rootName ->
-                            navController.navigate(Route.guangyaFileCleaner(parentId, rootName))
-                        },
-                        onOpenEmptyFolderCleaner = { rootParentId, rootName ->
-                            navController.navigate(Route.guangyaEmptyFolderCleaner(rootParentId, rootName))
                         }
-                    )
-                }
-                composable(
-                    route = Route.GuangyaFileCleaner,
-                    arguments = listOf(
-                        navArgument("parentId") { type = NavType.StringType; defaultValue = "" },
-                        navArgument("rootName") { type = NavType.StringType; defaultValue = "根目录" }
-                    )
-                ) { entry ->
-                    val viewModel: GuangyaFileCleanerViewModel = viewModel(
-                        factory = GuangyaFileCleanerViewModel.factory(
-                            repository = appContainer.guangyaBrowserRepository,
-                            settingsRepository = appContainer.settingsRepository,
-                            cleanExecutor = appContainer.guangyaCleanExecutor
-                        )
-                    )
-                    GuangyaFileCleanerScreen(
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() },
-                        rootParentId = entry.arguments?.getString("parentId").orEmpty(),
-                        rootName = entry.arguments?.getString("rootName").orEmpty()
-                    )
-                }
-                composable(
-                    route = Route.GuangyaEmptyFolderCleaner,
-                    arguments = listOf(
-                        navArgument("parentId") { type = NavType.StringType; defaultValue = "" },
-                        navArgument("rootName") { type = NavType.StringType; defaultValue = "根目录" }
-                    )
-                ) { entry ->
-                    val parentId = entry.arguments?.getString("parentId").orEmpty()
-                    val rootName = entry.arguments?.getString("rootName").orEmpty()
-                    val viewModel: GuangyaEmptyFolderCleanerViewModel = viewModel(
-                        factory = GuangyaEmptyFolderCleanerViewModel.factory(
-                            repository = appContainer.guangyaBrowserRepository,
-                            cleanExecutor = appContainer.guangyaCleanExecutor
-                        )
-                    )
-                    GuangyaEmptyFolderCleanerScreen(
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() },
-                        initialParentId = parentId,
-                        initialRootName = rootName
-                    )
-                }
-                composable(Route.CloudClean) {
-                    val viewModel: CloudCleanViewModel = viewModel(
-                        factory = CloudCleanViewModel.factory(
-                            cloud115Client = appContainer.cloud115Client,
-                            settingsRepository = appContainer.settingsRepository
-                        )
-                    )
-                    CloudCleanScreen(
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() }
-                    )
-                }
-                composable(
-                    route = Route.CloudEmptyCleaner,
-                    arguments = listOf(
-                        navArgument("cid") { type = NavType.LongType; defaultValue = 0L },
-                        navArgument("rootName") { type = NavType.StringType; defaultValue = "" }
-                    )
-                ) { entry ->
-                    val cid = entry.arguments?.getLong("cid") ?: 0L
-                    val rootName = entry.arguments?.getString("rootName").orEmpty()
-                    val viewModel: CloudEmptyFolderViewModel = viewModel(
-                        factory = CloudEmptyFolderViewModel.factory(
-                            cloud115Client = appContainer.cloud115Client,
-                            rootCid = cid,
-                            rootName = rootName
-                        )
-                    )
-                    CloudEmptyFolderScreen(
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() }
                     )
                 }
                 composable(Route.Settings) {
@@ -497,8 +397,7 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                         viewModel = viewModel,
                         onOpenScrapeLogs = { navController.navigate(Route.ScrapeLogs) },
                         onOpenPlayerLogs = { navController.navigate(Route.PlayerLogs) },
-                        onOpenGuangyaBrowser = { navController.navigate(Route.GuangyaBrowser) },
-                        onOpenCloudClean = { navController.navigate(Route.CloudClean) }
+                        onOpenGuangyaBrowser = { navController.navigate(Route.GuangyaBrowser) }
                     )
                 }
                 composable(Route.SettingsUpdate) {
@@ -902,24 +801,11 @@ private object Route {
     const val ScrapeLogs = "scrapeLogs"
     const val PlayerLogs = "playerLogs"
     const val GuangyaBrowser = "guangyaBrowser"
-    const val CloudClean = "cloudClean"
-    const val CloudEmptyCleaner = "cloudEmptyCleaner?cid={cid}&rootName={rootName}"
-    const val GuangyaFileCleaner = "guangyaFileCleaner?parentId={parentId}&rootName={rootName}"
-    const val GuangyaEmptyFolderCleaner = "guangyaEmptyFolderCleaner?parentId={parentId}&rootName={rootName}"
     const val Detail = "movieDetail/{movieId}"
     const val FilterResult = "filterResult/{filterType}/{filterValue}"
     const val Player = "player/{videoUri}?title={title}&fileName={fileName}&movieId={movieId}"
 
     fun detail(movieId: Long) = "movieDetail/$movieId"
-
-    fun cloudEmptyCleaner(cid: Long, rootName: String) =
-        "cloudEmptyCleaner?cid=$cid&rootName=${Uri.encode(rootName)}"
-
-    fun guangyaEmptyFolderCleaner(parentId: String, rootName: String) =
-        "guangyaEmptyFolderCleaner?parentId=${Uri.encode(parentId)}&rootName=${Uri.encode(rootName)}"
-
-    fun guangyaFileCleaner(parentId: String, rootName: String) =
-        "guangyaFileCleaner?parentId=${Uri.encode(parentId)}&rootName=${Uri.encode(rootName)}"
 
     fun filterResult(filterType: String, filterValue: String) =
         "filterResult/${Uri.encode(filterType)}/${Uri.encode(filterValue)}"

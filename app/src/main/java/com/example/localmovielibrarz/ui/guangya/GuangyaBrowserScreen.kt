@@ -44,14 +44,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Cloud
-import androidx.compose.material.icons.rounded.Build
-import androidx.compose.material.icons.rounded.CreateNewFolder
-import androidx.compose.material.icons.rounded.DeleteSweep
-import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.FolderOff
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.VideoFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -93,12 +87,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.localmovielibrarz.cloudguangya.GuangyaFileItem
 import com.example.localmovielibrarz.cloudguangya.GuangyaFolderRef
 import com.example.localmovielibrarz.cloudguangya.GuangyaOfflineProgress
-import com.example.localmovielibrarz.ui.cloud.components.CloudBottomSheet
 import com.example.localmovielibrarz.ui.cloud.components.CloudOperationBar
 import com.example.localmovielibrarz.ui.cloud.components.CloudSearchBar
 import com.example.localmovielibrarz.ui.cloud.components.CloudSearchScope
 import com.example.localmovielibrarz.ui.cloud.components.CloudPrimaryAction
-import com.example.localmovielibrarz.ui.cloud.components.CloudToolEntryCard
 import com.example.localmovielibrarz.ui.cloud.components.SelectionBar
 import com.example.localmovielibrarz.ui.settings.settingsTextFieldColors
 import com.example.localmovielibrarz.ui.SEARCH_DEBOUNCE_MS
@@ -125,9 +117,7 @@ fun GuangyaBrowserScreen(
     onBack: () -> Unit,
     onPlayVideo: (GuangyaFileItem) -> Unit,
     topInsetHandled: Boolean = false,
-    backEnabled: Boolean = true, // ★ E-1：pager 双页保活时仅当前页接管返回
-    onOpenFileCleaner: ((rootParentId: String, rootName: String) -> Unit)? = null,
-    onOpenEmptyFolderCleaner: ((rootParentId: String, rootName: String) -> Unit)? = null
+    backEnabled: Boolean = true // ★ E-1：pager 双页保活时仅当前页接管返回
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val offlineProgress by viewModel.offlineProgress.collectAsStateWithLifecycle()
@@ -135,14 +125,11 @@ fun GuangyaBrowserScreen(
     val statusBarPadding = if (topInsetHandled) Modifier else Modifier.windowInsetsPadding(WindowInsets.statusBars)
     var pendingFolder by remember { mutableStateOf<GuangyaFileItem?>(null) }
     var showOfflineDialog by remember { mutableStateOf(false) }
-    // 需求 4：工具箱弹层状态（收叠 UI）
-    var showToolbox by remember { mutableStateOf(false) }
     // 需求 3：文件管理弹窗状态（回收站确认 / 移动目录选择）
     var showRecycleConfirm by remember { mutableStateOf(false) }
     var showMoveDialog by remember { mutableStateOf(false) }
-    // 需求 3 补充：批量重命名（模板化）/ 解散子目录
+    // 需求 3 补充：批量重命名（模板化）
     var showBatchRenameDialog by remember { mutableStateOf(false) }
-    var showDissolveConfirm by remember { mutableStateOf(false) }
     // ★ 第九轮（问题 1）：批量重命名完成检测——batchRenameRunning（ViewModel 专用字段）
     // 从 true 变 false（成功/失败均已复位）时自动关闭弹窗，停留当前目录；操作中禁止手动关闭
     var batchRenameWasRunning by remember { mutableStateOf(false) }
@@ -245,14 +232,13 @@ fun GuangyaBrowserScreen(
             topInsetHandled = topInsetHandled
         )
 
-        // 统一操作栏：返回上级 + 根目录（左） / 搜索 + 工具箱 + 离线下载（右）
+        // 统一操作栏：返回上级 + 根目录（左） / 搜索 + 离线下载（右）
         CloudOperationBar(
             canGoBack = viewModel.canGoBackFolder(),
             onGoBack = viewModel::goUp,
             onGoRoot = viewModel::enterRoot,
             primaryAction = if (state.loading) CloudPrimaryAction.Loading
                             else CloudPrimaryAction.OfflineDownload { showOfflineDialog = true },
-            onToolbox = { showToolbox = true },
             onSearch = { showSearch = true }
         )
 
@@ -281,8 +267,6 @@ fun GuangyaBrowserScreen(
             )
         }
 
-        // 需求 4：原整宽「工具箱：解散子目录」按钮与整宽搜索框已收叠到顶部图标 / 工具箱弹层
-
         // 完整版离线下载面板
         if (showOfflineDialog) {
             OfflineDownloadDialog(
@@ -292,37 +276,6 @@ fun GuangyaBrowserScreen(
                 defaultParentId = state.currentParentId,
                 onDismiss = { showOfflineDialog = false }
             )
-        }
-
-        // 统一工具箱弹层（四件套：文件清理 / 空文件夹清理 / 解散子目录 / 整理文件）
-        if (showToolbox) {
-            CloudBottomSheet(title = "工具箱", onDismiss = { showToolbox = false }) {
-                CloudToolEntryCard(Icons.Rounded.DeleteSweep, "文件清理", "按关键词/后缀/大小预扫描，勾选后分批移入回收站") {
-                    if (!state.initialized) {
-                        viewModel.notifyNotReady()
-                        return@CloudToolEntryCard
-                    }
-                    showToolbox = false; onOpenFileCleaner?.invoke(state.currentParentId, state.path.lastOrNull() ?: "根目录")
-                }
-                CloudToolEntryCard(Icons.Rounded.CreateNewFolder, "空文件夹清理", "递归扫描当前目录，列出空文件夹，勾选后移入回收站") {
-                    if (!state.initialized) {
-                        viewModel.notifyNotReady()
-                        return@CloudToolEntryCard
-                    }
-                    showToolbox = false
-                    onOpenEmptyFolderCleaner?.invoke(state.currentParentId, state.path.lastOrNull() ?: "当前目录")
-                }
-                CloudToolEntryCard(Icons.Rounded.FolderOff, "解散子目录", "把子目录中的文件移动到当前目录") {
-                    showToolbox = false; showDissolveConfirm = true
-                }
-                CloudToolEntryCard(Icons.Rounded.SelectAll, "整理文件", "多选 → 移动 / 回收站 / 批量重命名") {
-                    showToolbox = false; viewModel.enterSelectionMode()
-                }
-                CloudToolEntryCard(Icons.Rounded.DriveFileRenameOutline, "批量重命名", "删除/替换 · 插入 · 全新命名 · 正则，支持模板") {
-                    showToolbox = false
-                    viewModel.enterSelectionMode()
-                }
-            }
         }
 
         state.message?.let { msg ->
@@ -486,28 +439,6 @@ fun GuangyaBrowserScreen(
         )
     }
 
-    // 需求 3 补充：解散子目录确认
-    if (showDissolveConfirm) {
-        AlertDialog(
-            onDismissRequest = { showDissolveConfirm = false },
-            title = { Text("解散子目录？") },
-            text = {
-                Text(
-                    "会把当前目录下所有子目录（含更深层）中的文件移动到当前目录并刷新；" +
-                        "与当前目录重名的文件会被跳过，文件夹本身不会被删除。此操作不可撤销。"
-                )
-            },
-            confirmButton = {
-                Button(onClick = {
-                    showDissolveConfirm = false
-                    viewModel.dissolveSubdirectories()
-                }) { Text("开始解散") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDissolveConfirm = false }) { Text("取消") }
-            }
-        )
-    }
 }
 
 // ==================== 离线下载完整面板 ====================

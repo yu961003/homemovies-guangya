@@ -34,12 +34,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.VideoFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -52,8 +49,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -62,7 +57,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -87,12 +81,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.localmovielibrarz.cloud115.Cloud115FileItem
 import com.example.localmovielibrarz.data.local.CloudFolderBatchTaskEntity
 import com.example.localmovielibrarz.data.local.CloudFolderBatchTaskStatus
-import com.example.localmovielibrarz.ui.cloud.components.CloudBottomSheet
 import com.example.localmovielibrarz.ui.cloud.components.CloudOperationBar
 import com.example.localmovielibrarz.ui.cloud.components.CloudPrimaryAction
 import com.example.localmovielibrarz.ui.cloud.components.CloudSearchBar
 import com.example.localmovielibrarz.ui.cloud.components.CloudSearchScope
-import com.example.localmovielibrarz.ui.cloud.components.CloudToolEntryCard
 import com.example.localmovielibrarz.ui.SEARCH_DEBOUNCE_MS
 
 import kotlinx.coroutines.delay
@@ -120,15 +112,11 @@ fun CloudBrowserScreen(
     onPlayVideo: (Cloud115FileItem) -> Unit,
     onMovieAdded: (Long) -> Unit,
     topInsetHandled: Boolean = false,
-    backEnabled: Boolean = true, // ★ E-1：pager 双页保活时仅当前页接管返回
-    onOpenCloudClean: (() -> Unit)? = null,
-    onOpenEmptyCleaner: ((rootCid: Long, rootName: String) -> Unit)? = null
+    backEnabled: Boolean = true // ★ E-1：pager 双页保活时仅当前页接管返回
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingBatchFolder by remember { mutableStateOf<Cloud115FileItem?>(null) }
-    // 需求 13.4：工具箱底部面板
-    var showToolSheet by remember { mutableStateOf(false) }
     // 需求 2：搜索关键字本地状态（受控输入，清空时与 ViewModel 同步）
     var queryText by remember { mutableStateOf(uiState.searchQuery) }
     // 问题7：搜索条收起，点操作栏搜索图标呼出
@@ -254,16 +242,12 @@ fun CloudBrowserScreen(
                 topInsetHandled = topInsetHandled
             )
 
-            // UI 重构：统一操作栏（返回上级 + 根目录 + 工具箱 + 搜索入口）
+            // 统一操作栏（返回上级 + 根目录 + 搜索入口）
             CloudOperationBar(
                 canGoBack = viewModel.canGoBackFolder(),
                 onGoBack = { viewModel.goBackFolder() },
                 onGoRoot = viewModel::resetToRoot,
-                primaryAction = if (uiState.isLoading) {
-                    CloudPrimaryAction.Loading
-                } else {
-                    CloudPrimaryAction.Toolbox(onClick = { showToolSheet = true })
-                },
+                primaryAction = if (uiState.isLoading) CloudPrimaryAction.Loading else null,
                 onSearch = { showSearch = true }
             )
 
@@ -331,33 +315,6 @@ fun CloudBrowserScreen(
         )
     }
 
-    // UI 重构：统一工具箱底部面板
-    if (showToolSheet) {
-        val currentDir = uiState.path.lastOrNull()
-        CloudBottomSheet(
-            title = "工具箱",
-            onDismiss = { showToolSheet = false }
-        ) {
-            CloudToolEntryCard(
-                icon = Icons.Rounded.DeleteSweep,
-                title = "文件清理",
-                subtitle = "按关键词 / 后缀 + 大小阈值扫描，批量移入回收站",
-                onClick = {
-                    showToolSheet = false
-                    onOpenCloudClean?.invoke()
-                }
-            )
-            CloudToolEntryCard(
-                icon = Icons.Rounded.FolderOpen,
-                title = "空文件夹清理",
-                subtitle = "逐级识别真空文件夹，确认后批量移入回收站",
-                onClick = {
-                    showToolSheet = false
-                    onOpenEmptyCleaner?.invoke(currentDir?.cid ?: 0L, currentDir?.name ?: "根目录")
-                }
-            )
-        }
-    }
 }
 
 @Composable
@@ -369,8 +326,7 @@ private fun CloudTopBar(
     onSortOptionSelected: (CloudSortOption) -> Unit,
     sortAscending: Boolean,
     onToggleSortDirection: () -> Unit,
-    topInsetHandled: Boolean = false,
-    onOpenTools: (() -> Unit)? = null
+    topInsetHandled: Boolean = false
 ) {
     var sortMenuExpanded by remember { androidx.compose.runtime.mutableStateOf(false) }
     Column(
@@ -451,29 +407,6 @@ private fun CloudTopBar(
                     tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(20.dp)
                 )
-            }
-            // 工具箱入口：仅当 onOpenTools 不为 null 时显示（UI 重构后由 CloudOperationBar 承载）
-            if (onOpenTools != null) {
-                OutlinedButton(
-                    onClick = onOpenTools,
-                    shape = AppRadius.LG,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    modifier = Modifier.padding(start = 4.dp)
-                ) {
-                    Icon(
-                        Icons.Rounded.Build,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
-                    )
-                    Text(
-                        text = "工具箱",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
-                        modifier = Modifier.padding(start = 4.dp)
-                    )
-                }
             }
         }
         Text(

@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Search
@@ -37,7 +36,7 @@ import com.example.localmovielibrarz.ui.MinTouchTarget
  *
  * 设计动机：原「图标+文字」胶囊一行总宽 ~428dp，超出 360dp 屏宽导致拥挤。
  * 改为 40dp 图标钮后整行 ~200dp；功能说明放 contentDescription（无障碍可读）。
- * 主操作（离线下载/工具箱）用 primaryContainer 圆形底座区分层级，
+ * 主操作（离线下载）用 primaryContainer 圆形底座区分层级，
  * token 与底部导航选中态、网盘切换栏一致，不引入新颜色。
  */
 @Composable
@@ -45,9 +44,8 @@ fun CloudOperationBar(
     canGoBack: Boolean,
     onGoBack: () -> Unit,
     onGoRoot: () -> Unit,
-    primaryAction: CloudPrimaryAction,
+    primaryAction: CloudPrimaryAction?,
     modifier: Modifier = Modifier,
-    onToolbox: (() -> Unit)? = null,
     onSearch: (() -> Unit)? = null
 ) {
     Row(
@@ -77,14 +75,10 @@ fun CloudOperationBar(
         if (onSearch != null) {
             CloudNavIcon(Icons.Rounded.Search, "搜索", onSearch)
         }
-        // 右：工具箱次入口（光鸭页：工具箱弹层 + 离线下载主操作并存时）
-        if (onToolbox != null) {
-            CloudNavIcon(Icons.Rounded.Build, "工具箱", onToolbox)
-        }
-        // 右：主操作（primaryContainer 圆形底座）
+        // 右：主操作（primaryContainer 圆形底座）。115 页已无主操作（传 null），
+        // 光鸭页传 OfflineDownload；加载中显示进度圈占位，避免右侧图标跳位。
         when (primaryAction) {
-            is CloudPrimaryAction.Toolbox ->
-                CloudPrimaryIcon(Icons.Rounded.Build, "工具箱", primaryAction.onClick)
+            null -> Unit
             is CloudPrimaryAction.OfflineDownload ->
                 CloudPrimaryIcon(Icons.Rounded.CloudDownload, "离线下载", primaryAction.onClick)
             is CloudPrimaryAction.Loading -> Box(
@@ -97,9 +91,11 @@ fun CloudOperationBar(
     }
 }
 
-/** 主操作按钮配置（115 传 Toolbox，光鸭传 OfflineDownload）。 */
+/**
+ * 主操作按钮配置。115 页不传（null = 无主操作），光鸭页传 [OfflineDownload]，
+ * 加载中传 [Loading] 占位。
+ */
 sealed class CloudPrimaryAction {
-    data class Toolbox(val onClick: () -> Unit) : CloudPrimaryAction()
     data class OfflineDownload(val onClick: () -> Unit) : CloudPrimaryAction()
     data object Loading : CloudPrimaryAction()
 }

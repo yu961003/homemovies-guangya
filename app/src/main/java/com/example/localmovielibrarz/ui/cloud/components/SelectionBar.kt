@@ -38,7 +38,7 @@ import androidx.compose.foundation.layout.sizeIn
 import com.example.localmovielibrarz.ui.MinTouchTarget
 
 /**
- * 批量操作悬浮条（115 / 光鸭 / 清理工具共用，修复二轮统一视觉）。
+ * 批量操作悬浮条（115 / 光鸭共用，修复二轮统一视觉）。
  *
  * 第一行：全选框 + 计数 + 全选文本钮 + 关闭；第二行：等宽图标操作（不再横滚）。
  */

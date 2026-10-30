@@ -21,7 +21,6 @@ import com.example.localmovielibrarz.data.repository.StrmScrapeRepository
 import com.example.localmovielibrarz.data.repository.finalizeOrganizedScrape
 import com.example.localmovielibrarz.scraper.MovieNumberExtractor
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,9 +44,7 @@ data class GuangyaBrowserUiState(
     val selectedIds: Set<String> = emptySet(),
     val managing: Boolean = false,
     // ★ 第九轮：批量重命名专用运行标记（managing 被回收站/移动/解散等操作复用，不能直接用于弹窗滞留判定）
-    val batchRenameRunning: Boolean = false,
-    // 5a：首次 loadFiles 已结束（成功或失败均置 true）。用于工具箱入口在加载未完成时拦截。
-    val initialized: Boolean = false
+    val batchRenameRunning: Boolean = false
 )
 
 /** 离线下载文本解析预览（含记忆过滤统计）。 */
@@ -170,11 +167,6 @@ class GuangyaBrowserViewModel(
 
     fun clearMessage() {
         _uiState.update { it.copy(message = null) }
-    }
-
-    /** 5a：目录尚未完成首次加载时，工具箱入口点击后的提示。 */
-    fun notifyNotReady() {
-        _uiState.update { it.copy(message = "目录仍在加载，请稍后再试") }
     }
 
     // ---------------- 离线下载（cloudcollection/v1，完整功能版） ----------------
@@ -866,123 +858,6 @@ class GuangyaBrowserViewModel(
             .forEach { settingsRepository.deleteGuangyaBatchRenameTemplate(it.toJson()) }
     }
 
-    /**
-     * 解散子目录：递归收集当前目录下所有子目录中的文件，批量移动到当前目录。
-     * 重写版（第四轮修复）：分批移动 + 进度反馈 + 空列表提前返回（不再误报「已完成」）。
-     */
-    fun dissolveSubdirectories() {
-        val parentId = _uiState.value.currentParentId
-        if (_uiState.value.managing) return
-        _uiState.update { it.copy(managing = true, message = "正在扫描子目录…") }
-        viewModelScope.launch {
-            runCatching {
-                // 1. 先收集（带安全限制）
-                val existingNames = _uiState.value.files.map { it.name }.toSet()
-                val allFiles = collectFilesRecursively(parentId)
-                    .filter { it.fileId.isNotBlank() && it.name !in existingNames }
-                    .distinctBy { it.fileId }
-
-                if (allFiles.isEmpty()) {
-                    // ★ 空列表提前返回，不再走「已把 0 个文件…」——这是 4b 确认的误报根因
-                    _uiState.update {
-                        it.copy(managing = false, message = "当前目录下没有需要解散的子目录文件")
-                    }
-                    return@launch
-                }
-
-                // 2. 分批移动 + 进度反馈（每批 50 = moveFiles 内部 chunked(50)，一次调用恰好一个服务端批次）
-                val total = allFiles.size
-                var moved = 0
-                var failed = 0
-                val batches = allFiles.chunked(DISSOLVE_BATCH_SIZE)
-                _uiState.update { it.copy(message = "正在解散子目录：0/$total（共 ${batches.size} 批）") }
-
-                for ((batchIndex, batch) in batches.withIndex()) {
-                    coroutineContext.ensureActive()   // ★ 协程取消检查（页面销毁 / ViewModel 清理时退出）
-                    try {
-                        repository.moveFiles(batch.map { it.fileId }, parentId)
-                        moved += batch.size
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        failed += batch.size   // 单批失败不中止，最后汇总
-                    }
-                    _uiState.update {
-                        it.copy(
-                            message = "正在解散子目录：${moved + failed}/$total" +
-                                "（第 ${batchIndex + 1}/${batches.size} 批）" +
-                                if (failed > 0) " · 失败 $failed" else ""
-                        )
-                    }
-                }
-
-                // 3. 全部批次结束后才提示完成（含失败计数）
-                _uiState.update {
-                    it.copy(
-                        message = "解散完成：成功移动 $moved 个文件" +
-                            if (failed > 0) "，失败 $failed 个（可重试）" else "",
-                        managing = false,
-                        selectionMode = false,
-                        selectedIds = emptySet()
-                    )
-                }
-                loadFiles(parentId)
-            }.onFailure { error ->
-                _uiState.update {
-                    it.copy(
-                        message = "解散子目录失败：${error.userMessage()}",
-                        managing = false
-                    )
-                }
-            }
-        }
-    }
-
-    /**
-     * 栈式 DFS 收集子目录中的文件（非递归，防栈溢出）。
-     * 语义对齐原递归实现：只收集子目录（depth >= 1）内的文件，
-     * 当前目录（depth=0）的直属文件不收集、不移动。
-     * @return 收集到的文件列表；超过数量上限时抛 IllegalStateException
-     */
-    private suspend fun collectFilesRecursively(parentId: String): List<GuangyaFileItem> {
-        val result = ArrayList<GuangyaFileItem>()
-        val visited = mutableSetOf<String>()
-        val stack = ArrayDeque<Pair<String, Int>>()   // (目录 ID, 深度)
-        stack.add(parentId to 0)
-
-        while (stack.isNotEmpty()) {
-            val (dirId, depth) = stack.removeLast()
-            if (dirId in visited) continue
-            visited.add(dirId)
-            if (depth > DISSOLVE_MAX_DEPTH) continue   // 深度保护
-
-            val children = try {
-                repository.listFiles(dirId)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                continue   // 单目录读取失败跳过
-            }
-
-            for (child in children) {
-                if (child.isDir && child.fileId.isNotBlank()) {
-                    stack.add(child.fileId to depth + 1)
-                } else if (depth > 0 && child.fileId.isNotBlank()) {
-                    // ★ depth > 0：跳过当前目录直属文件。
-                    //   第四轮方案漏了此判断，会把直属文件提交 moveItems(fileId, parentId)
-                    //   （移动到自身所在目录），仅靠同名过滤兜不住缓存不一致的情况。
-                    if (result.size >= DISSOLVE_MAX_FILES) {
-                        throw IllegalStateException(
-                            "子目录文件数超过上限 $DISSOLVE_MAX_FILES，请先手动整理部分子目录后再解散"
-                        )
-                    }
-                    result.add(child)
-                }
-            }
-        }
-        return result
-    }
-
     private fun loadFiles(parentId: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
@@ -999,7 +874,7 @@ class GuangyaBrowserViewModel(
                 items to added
             }            .onSuccess { (items, added) ->
                 _uiState.update {
-                    it.copy(files = items, addedFileIds = added, loading = false, initialized = true)
+                    it.copy(files = items, addedFileIds = added, loading = false)
                 }
             }.onFailure { error ->
                 val msg = when (error) {
@@ -1008,18 +883,13 @@ class GuangyaBrowserViewModel(
                     else -> error.message ?: "加载失败"
                 }
                 _uiState.update {
-                    it.copy(error = msg, loading = false, initialized = true)
+                    it.copy(error = msg, loading = false)
                 }
             }
         }
     }
 
     companion object {
-        // 解散子目录安全限制
-        private const val DISSOLVE_MAX_FILES = 2000     // 文件数上限
-        private const val DISSOLVE_MAX_DEPTH = 20       // 递归深度上限
-        private const val DISSOLVE_BATCH_SIZE = 50      // 必须与 moveFiles 内部 chunked(50) 一致，
-                                                        // 保证一次调用恰好对应一个服务端批次
         fun factory(
             repository: GuangyaBrowserRepository,
             strmRepository: GuangyaStrmRepository,
