@@ -70,8 +70,8 @@ class LocalSubtitleLibraryRepository(
         if (keyword.isBlank()) return emptyList()
         val escaped = keyword
             .replace("\\", "\\\\")
-            .replace("%", "\%")
-            .replace("_", "\_")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
         return dao.searchByKeyword(escaped, limit).mapNotNull { entity ->
             runCatching { Uri.parse(entity.uri) }
                 .getOrNull()
