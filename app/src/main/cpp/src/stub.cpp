@@ -22,6 +22,8 @@ jni_func(jstring, lastError) { return nullptr; }
 jni_func(jint, attachSurface, jobject surface) { return -10; }
 jni_func(jint, detachSurface) { return 0; }
 jni_func(jint, setSurfaceSize, jint width, jint height) { return 0; }
+jni_func(jboolean, hasSurface) { return JNI_FALSE; }
+jni_func(jint, ensureSurface) { return -10; }
 jni_func(jint, setOptionString, jstring option, jstring value) { return -1; }
 jni_func(jobject, getPropertyInt, jstring property) { return nullptr; }
 jni_func(void, setPropertyInt, jstring property, jint value) {}

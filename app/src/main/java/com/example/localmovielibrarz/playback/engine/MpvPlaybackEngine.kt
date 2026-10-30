@@ -72,7 +72,7 @@ class MpvPlaybackEngine(
      * 此时再改 `wid` 也不会自动重建（`command.c` 的 UPDATE_VO 分支要求 video_out 非空），
      * 只有 `video-reload` 会重新走一遍 VO 初始化。所以只能给一次机会，不能无限重试。
      */
-    private var videoReloadTried = false
+    private var videoReloadTried = 0
 
     private var currentUri: String? = null
     private var currentHeaders: Map<String, String> = emptyMap()
@@ -388,6 +388,10 @@ class MpvPlaybackEngine(
      */
     private fun awaitSurfaceThen(attempt: Int = 0, action: () -> Unit) {
         if (released) return
+        // 每一轮先让原生确认「**当前句柄**的 wid 已写入」再问状态。
+        // 只问 Kotlin 侧缓存会被上一代句柄的旧状态骗过去——上一版仍黑屏正是这个原因：
+        // 新引擎 create() 换掉了 mpv 句柄，布尔量却还是 true，于是这里立刻放行 loadfile。
+        MPVLib.ensureSurfaceSafe()
         if (MPVLib.surfacePresent) {
             action()
             return
@@ -868,7 +872,7 @@ class MpvPlaybackEngine(
 
     /** 每次 loadfile 前复位自检状态。 */
     private fun resetVideoOutputAudit() {
-        videoReloadTried = false
+        videoReloadTried = 0
         mainHandler.removeCallbacks(videoOutputAudit)
     }
 
@@ -892,14 +896,30 @@ class MpvPlaybackEngine(
      */
     private fun auditVideoOutput() {
         if (released || !fileLoaded.get()) return
-        // 已经有真正的根因（加载失败等）报过了，别用「黑屏」把它盖掉。
-        if (_snapshot.value.errorMessage != null) return
-        if (MPVLib.getBoolean("vo-configured") != false) return
+        val currentError = _snapshot.value.errorMessage
+        // 已经有真正的根因（加载失败等）报过了，别用「黑屏」把它盖掉；
+        // 但「黑屏」这条自己是可撤销的——surface 迟到后 VO 可能补建立起来。
+        if (currentError != null && !currentError.startsWith(VIDEO_OUTPUT_ERROR_PREFIX)) return
+
+        if (MPVLib.getBoolean("vo-configured") == true) {
+            // 画面已经建立（靠 reload 或后续补挂的 surface 自愈），把之前的黑屏提示撤掉。
+            if (currentError != null) {
+                Log.i(TAG, "视频输出已建立，撤销之前的黑屏提示")
+                updateSnapshot { it.copy(errorMessage = null) }
+            }
+            return
+        }
+
+        // 句柄可能刚被重建（切内核 / 重进播放页）：先把 wid 重放，再判断。
+        MPVLib.ensureSurfaceSafe()
         val signature = videoOutputFailureSignature() ?: return
 
-        if (!videoReloadTried && MPVLib.surfacePresent) {
-            videoReloadTried = true
-            Log.w(TAG, "视频输出未建立（$signature）：Surface 已就绪，尝试 video-reload 重建")
+        if (videoReloadTried < VIDEO_OUTPUT_RELOAD_MAX_ATTEMPTS && MPVLib.surfacePresent) {
+            videoReloadTried++
+            Log.w(
+                TAG,
+                "视频输出未建立（$signature）：Surface 已就绪，第 $videoReloadTried 次 video-reload 重建"
+            )
             MPVLib.cmd("video-reload")
             mainHandler.removeCallbacks(videoOutputAudit)
             mainHandler.postDelayed(videoOutputAudit, VIDEO_OUTPUT_RELOAD_RECHECK_MS)
@@ -932,9 +952,14 @@ class MpvPlaybackEngine(
 
     /** 黑屏时补一句「该往哪看」，免得把问题误判成解码或网络。 */
     private fun describeVideoOutputPath(): String {
-        val surface = if (MPVLib.surfacePresent) "已挂载" else "未挂载（Surface 没到或已被销毁）"
+        val surface = if (MPVLib.surfacePresent) {
+            "已挂载（wid 属于当前句柄）"
+        } else {
+            "未挂载（Surface 未到 / 已被销毁 / **句柄重建后 wid 归零**）"
+        }
         val vo = MPVLib.getString("current-vo") ?: "unknown"
-        return "；渲染面=$surface，vo=$vo，hwdec=${activeHwdecMode.mpvValue}"
+        val reload = if (videoReloadTried > 0) "，已试 video-reload×$videoReloadTried" else ""
+        return "；渲染面=$surface，vo=$vo$reload，hwdec=${activeHwdecMode.mpvValue}"
     }
 
     /**
@@ -1278,8 +1303,20 @@ class MpvPlaybackEngine(
         /** 等渲染面的重试间隔：约一帧。SurfaceView 通常 1~3 帧内就绪。 */
         private const val SURFACE_WAIT_RETRY_MS = 16L
 
-        /** 最多等 2.4 秒（150 帧）：再等下去就是 View 根本没起来，报错比死等有用。 */
-        private const val SURFACE_WAIT_MAX_ATTEMPTS = 150
+        /**
+         * 最多等 8 秒（500 帧）。
+         *
+         * 旧值是 150（2.4 秒）——那个预算假设「Surface 一两帧内必到」。切内核、冷启动、
+         * 低端机首帧解码时都不成立，超时后照样 loadfile，于是 VO 读不到 wid 而失败。
+         * 现在等待期间每轮都会重放 wid，多等几秒的代价远小于一次黑屏。
+         */
+        private const val SURFACE_WAIT_MAX_ATTEMPTS = 500
+
+        /** video-reload 最多重试几次：第一次失败常见于 surface 刚挂上、VO 还没重建完。 */
+        private const val VIDEO_OUTPUT_RELOAD_MAX_ATTEMPTS = 3
+
+        /** 黑屏错误的固定前缀：用于把「可撤销的画面错误」与真正的加载失败区分开。 */
+        private const val VIDEO_OUTPUT_ERROR_PREFIX = "mpv 画面未建立"
 
         /** 装载后多久检查视频输出：留够 VO 初始化 + 首帧渲染的时间。 */
         private const val VIDEO_OUTPUT_AUDIT_DELAY_MS = 1500L

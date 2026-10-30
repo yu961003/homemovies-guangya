@@ -71,7 +71,13 @@ class MpvVideoView @JvmOverloads constructor(
     fun attach() {
         engineReady = true
         val holder = surfaceView.holder
-        if (holder.surface?.isValid == true && (pendingAttach || !surfaceAttached)) {
+        // `!MPVLib.surfacePresent` 这一条是给「句柄被重建」准备的：本 View 的
+        // surfaceAttached 是「我给过 surface」的记录，而 wid 是按 mpv 句柄生效的——
+        // 换内核/重进播放页之后新句柄的 wid 是 0，只靠 surfaceAttached 判断会一直不补挂，
+        // 于是每次重组都跳过、画面永远起不来。
+        if (holder.surface?.isValid == true &&
+            (pendingAttach || !surfaceAttached || !MPVLib.surfacePresent)
+        ) {
             attachSurface(holder)
         }
     }

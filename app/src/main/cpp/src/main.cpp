@@ -17,6 +17,9 @@
 #include "event.h"
 #include "globals.h"
 
+// render.cpp：把已缓存的 Surface 重放成本句柄的 wid（见该文件里的注释）。
+int apply_cached_surface_to_current_handle();
+
 #define ARRAYLEN(a) (sizeof(a) / sizeof(a[0]))
 
 extern "C" {
@@ -190,6 +193,14 @@ jni_func(jint, init) {
     }
     g_event_thread_started = true;
     pthread_setname_np(event_thread_id, "mpv-event");
+
+    // Surface 通常比 mpv 实例先到（Compose 的 AndroidView 一进来就 surfaceCreated）。
+    // initialize 之前 mpv_set_property("wid") 不落地，只能在这一行把缓存重放进去；
+    // 漏掉它，新建的句柄 wid 恒为 0，android VO 会 MP_FATAL("Missing surface pointer")，
+    // 表现为「有声音、有进度、画面全黑」。
+    if (apply_cached_surface_to_current_handle() < 0)
+        ALOGW("initialize 后重放 surface 失败：画面可能起不来（见上面 wid 相关日志）");
+
     return 0;
 }
 

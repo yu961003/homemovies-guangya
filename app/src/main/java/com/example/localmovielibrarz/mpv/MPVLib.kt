@@ -153,6 +153,8 @@ object MPVLib {
     @JvmStatic private external fun command(args: Array<String>): Unit
     @JvmStatic private external fun attachSurface(surface: Surface): Int
     @JvmStatic private external fun detachSurface(): Int
+    @JvmStatic private external fun hasSurface(): Boolean
+    @JvmStatic private external fun ensureSurface(): Int
     @JvmStatic private external fun setSurfaceSize(width: Int, height: Int): Int
     @JvmStatic private external fun setOptionString(option: String, value: String): Int
     @JvmStatic private external fun getPropertyInt(property: String): Int?
@@ -197,31 +199,42 @@ object MPVLib {
     }
 
     /**
-     * 当前是否已经把有效 Surface 交给 mpv（等价于原生侧 `wid` 非 0）。
+     * 当前这个 mpv 句柄是否真的持有 Surface（等价于原生 `wid` 属于它）。
      *
-     * 为什么需要这个标志：mpv 的 android VO **只在第一次初始化视频输出时读一次 `wid`**。
-     * 读到的若是 0，`vo_android_init()` 直接 `MP_FATAL("Missing surface pointer")` 失败，
-     * 之后 mpv 退化成「只放声音」—— 音频、进度、时长全都正常，画面永远是黑的，
-     * 而且不会有任何 end-file 错误码。所以「装载媒体」必须排在这个标志为 true 之后
-     * （见 MpvPlaybackEngine.awaitSurfaceThen）。
+     * mpv 的 android VO **只在视频输出第一次初始化时读一次 `wid`**：读到 0 就
+     * `vo_android_init()` → `MP_FATAL("Missing surface pointer")`，之后 mpv 退化成
+     * 「只放声音」（音频、进度、时长全正常，画面永远黑，且没有 end-file 错误码）。
+     * 所以装载媒体必须排在它之后（见 `MpvPlaybackEngine.awaitSurfaceThen`）。
      *
-     * 写入点只有下面两个包装（都在主线程由 MpvVideoView 调用），
-     * `@Volatile` 只是给跨线程读留的安全余量。
+     * **这里必须问原生，不能在 Kotlin 侧缓存一个布尔**：原生 `create()` 在旧实例还在时
+     * 会先 `destroy_mpv_locked()` 再 `mpv_create()`——句柄换了一个，而 `wid` 是按句柄
+     * 生效的，新句柄的 wid 恒为 0。旧实现那个「attach 成功过就置 true」的布尔会跨句柄
+     * 存活，把等待方直接骗过去，于是 `loadfile` 照发、VO 照失败：
+     * 真机日志 `渲染面=已挂载，vo=unknown` + `[vo/gpu/android] Missing surface pointer`
+     * 就是这个组合。
      */
-    @Volatile
-    var surfacePresent: Boolean = false
-        private set
+    val surfacePresent: Boolean
+        get() = ensureLoaded() && runCatching { hasSurface() }.getOrDefault(false)
 
     fun attachSurfaceSafe(surface: Surface): Int {
         if (!ensureLoaded()) return ERR_NOT_LOADED
         val ret = runCatching { attachSurface(surface) }.getOrDefault(ERR_NOT_LOADED)
-        if (ret == 0) surfacePresent = true
+        Log.i(TAG, "attachSurface -> $ret（hasSurface=${surfacePresent}）")
         return ret
     }
 
+    /**
+     * 幂等重放：把缓存的 Surface 写回**当前**句柄的 `wid`。
+     *
+     * 切内核、重新进播放页、Activity 重建都会让原生句柄换一个，而 Surface 还是同一个；
+     * 每次开播前调用一次，就不必依赖「谁记得在正确时机 attach」。已应用时是空操作。
+     */
+    fun ensureSurfaceSafe(): Int {
+        if (!ensureLoaded()) return ERR_NOT_LOADED
+        return runCatching { ensureSurface() }.getOrDefault(ERR_NOT_LOADED)
+    }
+
     fun detachSurfaceSafe(): Int {
-        // 先落标志再解绑：解绑之后 wid 归零，视频输出已经不可用，别让等待方误判。
-        surfacePresent = false
         if (!ensureLoaded()) return 0
         return runCatching { detachSurface() }.getOrDefault(ERR_NOT_LOADED)
     }
