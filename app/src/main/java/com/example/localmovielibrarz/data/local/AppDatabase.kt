@@ -20,9 +20,13 @@ import androidx.room.TypeConverters
         MovieFieldProvenanceEntity::class,
         EntityAliasEntity::class,
         SourceHealthEntity::class,
-        TaskRunEntity::class
+        TaskRunEntity::class,
+        // ★ 20 -> 21：本地字幕库索引。用户把手机里某个文件夹选成「字幕库」后，
+        // 扫描结果落这张表，播放时按番号直接查；不塞进 movies 是因为字幕与影片是
+        // 多对一（一部片可以有简中/繁中/日文多份），塞进主表会让主表按字幕数量膨胀。
+        LocalSubtitleLibraryEntity::class
     ],
-    version = 20,
+    version = 21,
     exportSchema = true
 )
 @TypeConverters(MovieTypeConverters::class)
@@ -38,4 +42,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun entityAliasDao(): EntityAliasDao
     abstract fun sourceHealthDao(): SourceHealthDao
     abstract fun taskRunDao(): TaskRunDao
+    abstract fun localSubtitleLibraryDao(): LocalSubtitleLibraryDao
 }

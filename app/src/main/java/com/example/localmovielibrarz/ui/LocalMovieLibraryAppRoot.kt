@@ -489,7 +489,8 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                             cloudVideoTaskRepository = appContainer.cloudVideoTaskRepository,
                             cloudVideoTaskRunner = appContainer.cloudVideoTaskRunner,
                             movieScrapeTaskRunner = appContainer.movieScrapeTaskRunner,
-                            movieMetadataRefreshRunner = appContainer.movieMetadataRefreshRunner
+                            movieMetadataRefreshRunner = appContainer.movieMetadataRefreshRunner,
+                            localSubtitleLibraryRepository = appContainer.localSubtitleLibraryRepository
                         )
                     )
                     SettingsScreen(
@@ -514,7 +515,8 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                             cloudVideoTaskRepository = appContainer.cloudVideoTaskRepository,
                             cloudVideoTaskRunner = appContainer.cloudVideoTaskRunner,
                             movieScrapeTaskRunner = appContainer.movieScrapeTaskRunner,
-                            movieMetadataRefreshRunner = appContainer.movieMetadataRefreshRunner
+                            movieMetadataRefreshRunner = appContainer.movieMetadataRefreshRunner,
+                            localSubtitleLibraryRepository = appContainer.localSubtitleLibraryRepository
                         )
                     )
                     SettingsScreen(
@@ -539,7 +541,8 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                             cloudVideoTaskRepository = appContainer.cloudVideoTaskRepository,
                             cloudVideoTaskRunner = appContainer.cloudVideoTaskRunner,
                             movieScrapeTaskRunner = appContainer.movieScrapeTaskRunner,
-                            movieMetadataRefreshRunner = appContainer.movieMetadataRefreshRunner
+                            movieMetadataRefreshRunner = appContainer.movieMetadataRefreshRunner,
+                            localSubtitleLibraryRepository = appContainer.localSubtitleLibraryRepository
                         )
                     )
                     SettingsScreen(
@@ -662,7 +665,8 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                             playbackProgressRepository = appContainer.playbackProgressRepository,
                             movieRepository = appContainer.movieRepository,
                             movieId = movieId,
-                            usageStatsRepository = appContainer.usageStatsRepository
+                            usageStatsRepository = appContainer.usageStatsRepository,
+                            localSubtitleLibraryRepository = appContainer.localSubtitleLibraryRepository
                         )
                     )
                     PlayerScreen(

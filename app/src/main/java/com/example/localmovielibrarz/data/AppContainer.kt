@@ -23,6 +23,7 @@ import com.example.localmovielibrarz.data.repository.MovieRepository
 import com.example.localmovielibrarz.data.repository.MovieMetadataLedgerRepository
 import com.example.localmovielibrarz.data.repository.MovieMetadataRefreshRunner
 import com.example.localmovielibrarz.data.repository.MovieScrapeTaskRunner
+import com.example.localmovielibrarz.subtitle.LocalSubtitleLibraryRepository
 import com.example.localmovielibrarz.data.repository.SourceHealthRepository
 import com.example.localmovielibrarz.data.repository.TaskRunRepository
 import com.example.localmovielibrarz.scraper.ScrapeSourceHealthTracker
@@ -78,7 +79,8 @@ class AppContainer(context: Context) {
         MIGRATION_16_17,
         MIGRATION_17_18,
         MIGRATION_18_19,
-        MIGRATION_19_20
+        MIGRATION_19_20,
+        MIGRATION_20_21
     ).addCallback(
         object : RoomDatabase.Callback() {
             override fun onOpen(db: SupportSQLiteDatabase) {
@@ -106,6 +108,19 @@ class AppContainer(context: Context) {
     // 避免 App 启动时急初始化用户可能永远用不到的客户端与 Repository。
     val cloud115Client by lazy { Cloud115ApiClient(Cloud115CookieProvider(appContext)) }
     val cloud115QrLoginClient by lazy { Cloud115QrLoginClient(appContext, settingsRepository) }
+    /**
+     * 本地字幕库。
+     *
+     * 与 [cloud115Client] 同样走懒加载：没选过字幕库目录的用户永远用不到它，
+     * 而它构造时会摸一遍 prefs。
+     */
+    val localSubtitleLibraryRepository by lazy {
+        LocalSubtitleLibraryRepository(
+            context = appContext,
+            dao = database.localSubtitleLibraryDao(),
+            settingsRepository = settingsRepository
+        )
+    }
     val cloudStrmRecordRepository = CloudStrmRecordRepository(
         context = appContext,
         dao = database.cloudStrmRecordDao(),
@@ -735,6 +750,52 @@ class AppContainer(context: Context) {
                 db.execSQL(
                     "CREATE INDEX IF NOT EXISTS `index_task_runs_lastHeartbeatAtMillis` " +
                         "ON `task_runs` (`lastHeartbeatAtMillis`)"
+                )
+            }
+        }
+
+        /**
+         * 20 -> 21：本地字幕库索引表。
+         *
+         * DDL 必须与 [com.example.localmovielibrarz.data.local.LocalSubtitleLibraryEntity]
+         * 由 Room 推导出的 schema 逐字一致（列序无关；类型、可空性、索引名相关），
+         * 否则 Room 会在启动时报 `Migration didn't properly handle`。
+         *
+         * 索引四件套与 Entity 上的 `@Entity(indices = …)` 一一对应：`uri` 唯一
+         * （扫描是整根目录替换，重复 uri 说明扫描器有 bug，交给约束报错比静默去重好），
+         * 其余三个服务检索（按番号、按根目录、按文件名）。
+         */
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `local_subtitle_library` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`uri` TEXT NOT NULL, " +
+                        "`fileName` TEXT NOT NULL, " +
+                        "`relativePath` TEXT NOT NULL, " +
+                        "`ext` TEXT NOT NULL, " +
+                        "`movieNumber` TEXT, " +
+                        "`sizeBytes` INTEGER NOT NULL, " +
+                        "`lastModified` INTEGER NOT NULL, " +
+                        "`libraryRootUri` TEXT NOT NULL, " +
+                        "`indexedAt` INTEGER NOT NULL" +
+                        ")"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_local_subtitle_library_uri` " +
+                        "ON `local_subtitle_library` (`uri`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_local_subtitle_library_movieNumber` " +
+                        "ON `local_subtitle_library` (`movieNumber`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_local_subtitle_library_libraryRootUri` " +
+                        "ON `local_subtitle_library` (`libraryRootUri`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_local_subtitle_library_fileName` " +
+                        "ON `local_subtitle_library` (`fileName`)"
                 )
             }
         }

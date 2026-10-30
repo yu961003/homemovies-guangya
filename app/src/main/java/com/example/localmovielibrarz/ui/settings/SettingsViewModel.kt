@@ -41,6 +41,7 @@ import com.example.localmovielibrarz.scraper.ScrapeProxyMode
 import com.example.localmovielibrarz.scraper.ScrapeSource
 import com.example.localmovielibrarz.scraper.ScrapedMovieInfo
 import com.example.localmovielibrarz.util.NumberRecognitionRules
+import com.example.localmovielibrarz.subtitle.LocalSubtitleLibraryRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -63,7 +64,8 @@ class SettingsViewModel(
     private val cloudVideoTaskRepository: CloudVideoTaskRepository,
     private val cloudVideoTaskRunner: CloudVideoTaskRunner,
     private val movieScrapeTaskRunner: MovieScrapeTaskRunner,
-    private val movieMetadataRefreshRunner: MovieMetadataRefreshRunner
+    private val movieMetadataRefreshRunner: MovieMetadataRefreshRunner,
+    private val localSubtitleLibraryRepository: LocalSubtitleLibraryRepository
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(loadState())
     val uiState: StateFlow<SettingsUiState> = _uiState
@@ -1064,6 +1066,75 @@ class SettingsViewModel(
         }
     }
 
+    /**
+     * 选定本地字幕库目录并立刻扫一遍。
+     *
+     * 与 [scanLibrary]（影片库目录）刻意分开：影片库扫描会解析 NFO/海报/STRM 并写 movies 表，
+     * 字幕库只需要文件名和番号，几秒就能扫完几千条，不该连累影片库那一套重活。
+     */
+    fun selectLocalSubtitleLibrary(uri: Uri) {
+        runCatching { repository.saveLocalSubtitleLibraryUri(uri) }
+        _uiState.update {
+            it.copy(
+                localSubtitleLibraryDisplayName = repository.getLocalSubtitleLibraryDisplayName(),
+                localSubtitleLibraryMessage = null
+            )
+        }
+        scanLocalSubtitleLibrary()
+    }
+
+    fun scanLocalSubtitleLibrary() {
+        val root = localSubtitleLibraryRepository.libraryRootUri()
+        if (root == null) {
+            _uiState.update { it.copy(localSubtitleLibraryMessage = "请先选择字幕库目录") }
+            return
+        }
+        if (_uiState.value.localSubtitleLibraryScanning) return
+        _uiState.update {
+            it.copy(
+                localSubtitleLibraryScanning = true,
+                localSubtitleLibraryScanProgress = "正在扫描…",
+                localSubtitleLibraryMessage = null
+            )
+        }
+        viewModelScope.launch {
+            runCatching {
+                // 进度回调来自 IO 线程，且密度很高：这里 300ms 节流一次，
+                // 再用 StateFlow 的线程安全写法更新，避免每发现一个字幕就重组一次设置页。
+                var lastEmit = 0L
+                localSubtitleLibraryRepository.scanAndIndex(root) { scanned, found ->
+                    val now = System.currentTimeMillis()
+                    if (now - lastEmit >= 300L) {
+                        lastEmit = now
+                        _uiState.update {
+                            it.copy(localSubtitleLibraryScanProgress = "已扫描 $scanned 个文件 · 收录 $found 条字幕")
+                        }
+                    }
+                }
+            }
+                .onSuccess { count ->
+                    _uiState.update {
+                        it.copy(
+                            localSubtitleLibraryScanning = false,
+                            localSubtitleLibraryCount = count,
+                            localSubtitleLibraryScanProgress = "",
+                            localSubtitleLibraryMessage = "扫描完成：收录 $count 条字幕"
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    _uiState.update {
+                        it.copy(
+                            localSubtitleLibraryScanning = false,
+                            localSubtitleLibraryScanProgress = "",
+                            localSubtitleLibraryMessage = error.message ?: "扫描失败"
+                        )
+                    }
+                }
+        }
+    }
+
     fun scanLibrary(uri: Uri) {
         repository.saveLibraryRootUri(uri)
         _uiState.update {
@@ -1573,6 +1644,7 @@ class SettingsViewModel(
             autoDeleteInstalledUpdateApkEnabled = repository.isUpdateAutoDeleteInstalledApkEnabled(),
             libraryRootUri = repository.getLibraryRootUri(),
             libraryRootDisplayName = repository.getLibraryRootDisplayName(),
+            localSubtitleLibraryDisplayName = repository.getLocalSubtitleLibraryDisplayName(),
             strmBaseUrl = repository.getStrmBaseUrl(),
             defaultScrapeSource = repository.getDefaultScrapeSource(),
             priorityScrapeSources = repository.getPriorityScrapeSources(),
@@ -1636,7 +1708,8 @@ class SettingsViewModel(
             cloudVideoTaskRepository: CloudVideoTaskRepository,
             cloudVideoTaskRunner: CloudVideoTaskRunner,
             movieScrapeTaskRunner: MovieScrapeTaskRunner,
-            movieMetadataRefreshRunner: MovieMetadataRefreshRunner
+            movieMetadataRefreshRunner: MovieMetadataRefreshRunner,
+            localSubtitleLibraryRepository: LocalSubtitleLibraryRepository
         ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
@@ -1653,7 +1726,8 @@ class SettingsViewModel(
                         cloudVideoTaskRepository,
                         cloudVideoTaskRunner,
                         movieScrapeTaskRunner,
-                        movieMetadataRefreshRunner
+                        movieMetadataRefreshRunner,
+                        localSubtitleLibraryRepository
                     ) as T
             }
     }
@@ -1690,6 +1764,13 @@ data class SettingsUiState(
     val updateMessage: String = "",
     val libraryRootUri: String? = null,
     val libraryRootDisplayName: String = "尚未选择目录",
+    /** 本地字幕库根目录的可读名；没选过为「尚未选择字幕库目录」。 */
+    val localSubtitleLibraryDisplayName: String = "尚未选择字幕库目录",
+    /** 索引里现有字幕条数（按当前根目录统计）。 */
+    val localSubtitleLibraryCount: Int = 0,
+    val localSubtitleLibraryScanning: Boolean = false,
+    val localSubtitleLibraryScanProgress: String = "",
+    val localSubtitleLibraryMessage: String? = null,
     val strmBaseUrl: String = AppSettingsRepository.DEFAULT_STRM_BASE_URL,
     val defaultScrapeSource: ScrapeSource = ScrapeSource.Priority,
     val priorityScrapeSources: List<ScrapeSource> = AppSettingsRepository.DEFAULT_PRIORITY_SCRAPE_SOURCES,

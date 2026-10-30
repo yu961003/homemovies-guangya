@@ -1174,6 +1174,7 @@ private fun ExternalSubtitlePanel(
                                     text = when (option) {
                                         SubtitleSearchProvider.Cloud115 -> "搜索网盘里的字幕文件"
                                         SubtitleSearchProvider.Xunlei -> "按番号搜索迅雷字幕"
+                                        SubtitleSearchProvider.LocalLibrary -> "在手机本地字幕库里按番号找"
                                         else -> "在线字幕来源"
                                     },
                                     color = Color.White.copy(alpha = 0.55f),

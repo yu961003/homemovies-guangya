@@ -63,6 +63,7 @@ import com.example.localmovielibrarz.playback.vr.VrModeSettings
 import com.example.localmovielibrarz.subtitle.AvsubtitlesCloudflareException
 import com.example.localmovielibrarz.subtitle.AvsubtitlesSubtitleRepository
 import com.example.localmovielibrarz.subtitle.Cloud115SubtitleRepository
+import com.example.localmovielibrarz.subtitle.LocalSubtitleLibraryRepository
 import com.example.localmovielibrarz.subtitle.LocalSubtitleStore
 import com.example.localmovielibrarz.subtitle.LocalSubtitleFile
 import com.example.localmovielibrarz.subtitle.SubtitleSearchProvider
@@ -109,7 +110,8 @@ class PlayerViewModel(
     private val playbackProgressRepository: PlaybackProgressRepository,
     private val movieRepository: MovieRepository,
     private val movieId: Long,
-    private val usageStatsRepository: UsageStatsRepository
+    private val usageStatsRepository: UsageStatsRepository,
+    private val localSubtitleLibraryRepository: LocalSubtitleLibraryRepository
 ) : AndroidViewModel(application) {
     private val speeds = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f)
     private var speedIndex = 1
@@ -1207,6 +1209,9 @@ class PlayerViewModel(
                     SubtitleSearchProvider.Avsubtitles -> avsubtitlesSubtitleRepository.search(number, videoDurationMs)
                     SubtitleSearchProvider.Xunlei -> xunleiSubtitleRepository.search(number, videoDurationMs)
                     SubtitleSearchProvider.Cloud115 -> cloud115SubtitleRepository.search(number)
+                    SubtitleSearchProvider.LocalLibrary -> localSubtitleLibraryRepository
+                        .searchByNumber(number)
+                        .map { it.toSearchResult() }
                 }
             }.onSuccess { results ->
                 val message = subtitleSearchEmptyMessage(provider, results)
@@ -1333,6 +1338,11 @@ class PlayerViewModel(
                     SubtitleSearchProvider.Avsubtitles -> avsubtitlesSubtitleRepository.download(videoUri, fileName, result, storageSourceUri)
                     SubtitleSearchProvider.Xunlei -> xunleiSubtitleRepository.download(videoUri, fileName, result, storageSourceUri)
                     SubtitleSearchProvider.Cloud115 -> cloud115SubtitleRepository.download(videoUri, fileName, result, storageSourceUri)
+                    // 本地字幕库不下载：它本来就是手机里已有的文件，直接把 URI 交回去挂载。
+                    SubtitleSearchProvider.LocalLibrary -> LocalSubtitleFile(
+                        name = result.name,
+                        uri = Uri.parse(result.signature)
+                    )
                 }
             }.onSuccess { subtitle ->
                 val localFiles = runCatching {
@@ -2492,7 +2502,8 @@ class PlayerViewModel(
             playbackProgressRepository: PlaybackProgressRepository,
             movieRepository: MovieRepository,
             movieId: Long,
-            usageStatsRepository: UsageStatsRepository
+            usageStatsRepository: UsageStatsRepository,
+            localSubtitleLibraryRepository: LocalSubtitleLibraryRepository
         ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
@@ -2510,7 +2521,8 @@ class PlayerViewModel(
                         playbackProgressRepository = playbackProgressRepository,
                         movieRepository = movieRepository,
                         movieId = movieId,
-                        usageStatsRepository = usageStatsRepository
+                        usageStatsRepository = usageStatsRepository,
+                        localSubtitleLibraryRepository = localSubtitleLibraryRepository
                     ) as T
             }
     }
@@ -2594,7 +2606,32 @@ private fun normalizeSubtitleSearchNumber(number: String, provider: SubtitleSear
         SubtitleSearchProvider.Xunlei -> normalizeXunleiSubtitleNumber(number)
         SubtitleSearchProvider.Cloud115 -> normalizeCloud115SubtitleNumber(number)
         SubtitleSearchProvider.Avsubtitles -> normalizeDefaultSubtitleNumber(number)
+        // 本地库的索引与影片库共用 normalizeMovieNumber，所以按默认规则归一才不会错位。
+        SubtitleSearchProvider.LocalLibrary -> normalizeDefaultSubtitleNumber(number)
     }
+
+/**
+ * 把本地字幕库命中的文件包成在线搜索的同一返回类型。
+ *
+ * 复用 [SubtitleSearchResult] 而不是另开一条 UI 通道：这样来源选择行、结果列表、
+ * 点击加载全部沿用现成实现；`signature` 这一栏在本地库里存的是文件 URI
+ * （在线源的 signature 是下载凭据），[downloadAndLoadSubtitle] 的 LocalLibrary
+ * 分支据此直接还原 [LocalSubtitleFile]。
+ */
+private fun LocalSubtitleFile.toSearchResult(): SubtitleSearchResult {
+    val ext = name.substringAfterLast('.', "").lowercase()
+    return SubtitleSearchResult(
+        cid = uri.toString(),
+        ext = ext,
+        name = name,
+        durationMs = null,
+        language = "",
+        extraName = "",
+        timestamp = 0L,
+        signature = uri.toString(),
+        provider = SubtitleSearchProvider.LocalLibrary
+    )
+}
 
 private fun LocalSubtitleFile.mimeType(): String {
     return when (name.substringAfterLast('.', "").lowercase()) {
@@ -2628,6 +2665,7 @@ private fun subtitleSearchEmptyMessage(
         SubtitleSearchProvider.Cloud115 -> "网盘中没有找到包含番号的字幕文件"
         SubtitleSearchProvider.Xunlei -> "没有找到可用字幕"
         SubtitleSearchProvider.Avsubtitles -> "没有找到时长匹配的字幕"
+        SubtitleSearchProvider.LocalLibrary -> "本地字幕库里没有这个番号的字幕（可在设置-本地字幕库中重新扫描）"
     }
 }
 

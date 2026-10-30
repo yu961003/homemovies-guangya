@@ -154,6 +154,7 @@ private enum class SettingsPage {
     PlayerSubtitle,
     PlayerProgressBar,
     PlayerColorGrade,
+    PlayerSubtitleLibrary,
     StartupAnimation,
     Update,
     UsageStats
@@ -188,6 +189,8 @@ fun SettingsScreen(
     }
     val scope = rememberCoroutineScope()
     val libraryDirectoryPicker = rememberTreePicker { uri -> viewModel.scanLibrary(uri) }
+    // 字幕库目录单独一个选择器：它是 SAF tree 且只要读权限，选完立刻扫一遍索引。
+    val localSubtitleLibraryPicker = rememberTreePicker { uri -> viewModel.selectLocalSubtitleLibrary(uri) }
     val startupImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         scope.launch {
@@ -234,7 +237,8 @@ fun SettingsScreen(
         } else {
             currentPage = if (currentPage == SettingsPage.PlayerSubtitle ||
                 currentPage == SettingsPage.PlayerProgressBar ||
-                currentPage == SettingsPage.PlayerColorGrade
+                currentPage == SettingsPage.PlayerColorGrade ||
+                currentPage == SettingsPage.PlayerSubtitleLibrary
             ) SettingsPage.Player else null
         }
     }
@@ -316,7 +320,8 @@ fun SettingsScreen(
                     } else {
                         { currentPage = if (currentPage == SettingsPage.PlayerSubtitle ||
                         currentPage == SettingsPage.PlayerProgressBar ||
-                        currentPage == SettingsPage.PlayerColorGrade
+                        currentPage == SettingsPage.PlayerColorGrade ||
+                        currentPage == SettingsPage.PlayerSubtitleLibrary
                     ) SettingsPage.Player else null }
                     }
                 }
@@ -444,7 +449,8 @@ fun SettingsScreen(
                         onMpvHwdecModeChange = viewModel::updateMpvHwdecMode,
                         onOpenSubtitle = { currentPage = SettingsPage.PlayerSubtitle },
                         onOpenProgressBar = { currentPage = SettingsPage.PlayerProgressBar },
-                        onOpenColorGrade = { currentPage = SettingsPage.PlayerColorGrade }
+                        onOpenColorGrade = { currentPage = SettingsPage.PlayerColorGrade },
+                        onOpenLocalSubtitleLibrary = { currentPage = SettingsPage.PlayerSubtitleLibrary }
                     )
 
                     SettingsPage.PlayerSubtitle -> ExternalSubtitleSettingsPage(
@@ -452,6 +458,12 @@ fun SettingsScreen(
                         onExternalSubtitleFontSizeChange = viewModel::updateExternalSubtitleFontSizeSp,
                         onExternalSubtitleBottomPaddingChange = viewModel::updateExternalSubtitleBottomPaddingPercent,
                         onExternalSubtitleBackgroundAlphaChange = viewModel::updateExternalSubtitleBackgroundAlphaPercent
+                    )
+
+                    SettingsPage.PlayerSubtitleLibrary -> LocalSubtitleLibrarySettingsPage(
+                        uiState = uiState,
+                        onPickDirectory = { localSubtitleLibraryPicker.launch(null) },
+                        onRescan = viewModel::scanLocalSubtitleLibrary
                     )
 
                     SettingsPage.PlayerProgressBar -> PlayerProgressBarSettingsPage(
@@ -976,6 +988,7 @@ private fun SettingsPage.titleText(): String = when (this) {
     SettingsPage.PlayerSubtitle -> "外挂字幕"
     SettingsPage.PlayerProgressBar -> "进度条"
     SettingsPage.PlayerColorGrade -> "实时调色"
+    SettingsPage.PlayerSubtitleLibrary -> "本地字幕库"
     SettingsPage.StartupAnimation -> "开场动画"
     SettingsPage.Update -> "应用更新"
     SettingsPage.UsageStats -> "使用统计"
@@ -1140,7 +1153,8 @@ private fun PlayerSettingsPage(
     onMpvHwdecModeChange: (MpvHwdecMode) -> Unit,
     onOpenSubtitle: () -> Unit,
     onOpenProgressBar: () -> Unit,
-    onOpenColorGrade: () -> Unit
+    onOpenColorGrade: () -> Unit,
+    onOpenLocalSubtitleLibrary: () -> Unit
 ) {
     SettingsSectionTitle("播放内核")
     SettingsGroupCard(title = "双内核共存") {
@@ -1242,6 +1256,11 @@ private fun PlayerSettingsPage(
             title = "实时调色",
             subtitle = uiState.lutSettings.entrySubtitle(onMpv = uiState.defaultPlaybackEngineIsMpv),
             onClick = onOpenColorGrade
+        )
+        SettingsEntryRow(
+            title = "本地字幕库",
+            subtitle = "把手机里存字幕的文件夹选进来，播放时按番号直接命中（当前 ${uiState.localSubtitleLibraryDisplayName}）",
+            onClick = onOpenLocalSubtitleLibrary
         )
     }
 }
@@ -1534,6 +1553,65 @@ private fun ExternalSubtitleSettingsPage(
             valueText = "${uiState.externalSubtitleBackgroundAlphaPercent}%",
             onValueChange = onExternalSubtitleBackgroundAlphaChange
         )
+    }
+}
+
+/**
+ * 本地字幕库设置页。
+ *
+ * 只做三件事：选目录、看索引状态、重扫。刻意不放「匹配策略」「语言偏好」这类开关——
+ * 索引命中靠的是番号归一（与影片库同源），多一个策略就多一种「为什么没搜到」的解释成本。
+ */
+@Composable
+private fun LocalSubtitleLibrarySettingsPage(
+    uiState: SettingsUiState,
+    onPickDirectory: () -> Unit,
+    onRescan: () -> Unit
+) {
+    SettingsSectionTitle("字幕库目录")
+    SettingsGroupCard(title = "手机本地字幕库") {
+        SettingsEntryRow(
+            title = "选择字幕库文件夹",
+            subtitle = uiState.localSubtitleLibraryDisplayName,
+            onClick = onPickDirectory
+        )
+        SettingsEntryRow(
+            title = "重新扫描索引",
+            subtitle = when {
+                uiState.localSubtitleLibraryScanning -> uiState.localSubtitleLibraryScanProgress.ifBlank { "正在扫描…" }
+                uiState.localSubtitleLibraryCount > 0 -> "已收录 ${uiState.localSubtitleLibraryCount} 条字幕，点击重扫"
+                else -> "还没有索引，选完目录后会自动扫一遍"
+            },
+            onClick = { if (!uiState.localSubtitleLibraryScanning) onRescan() }
+        )
+    }
+    if (uiState.localSubtitleLibraryScanning) {
+        LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp))
+    }
+    uiState.localSubtitleLibraryMessage?.let { message ->
+        Text(
+            text = message,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+    SettingsSectionTitle("工作方式")
+    SettingsGroupCard(title = "说明") {
+        Column(modifier = Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "· 只建索引，不改动你的文件：扫描只读取文件名与大小，字幕原文件留在原目录。",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = "· 播放时按番号命中：番号归一规则与影片库同源（AB-12 / ab012 都能对上）。",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = "· 不出网、不下载：选中后直接把文件交给播放器挂载，省流量也更快。",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
     }
 }
 

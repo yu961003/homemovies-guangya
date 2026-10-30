@@ -273,6 +273,33 @@ class AppSettingsRepository(context: Context) {
 
     fun getKnownStrmTreeUris(): Set<String> = getKnownLibraryRootUris()
 
+    // ---- 本地字幕库 ----
+    // 刻意不复用 saveLibraryRootUri：那个方法会把 uri 同时写进 STRM 树键并触发
+    // .nomedia 同步（会在用户的字幕目录里建/删占位文件），字幕库不该有这些副作用。
+
+    fun getLocalSubtitleLibraryUri(): String? = prefs.getString(KEY_LOCAL_SUBTITLE_LIBRARY_URI, null)
+
+    fun getLocalSubtitleLibraryDisplayName(): String =
+        getTreeDisplayName(getLocalSubtitleLibraryUri()) ?: "尚未选择字幕库目录"
+
+    fun saveLocalSubtitleLibraryUri(uri: Uri) {
+        appContext.contentResolver.takePersistableUriPermission(
+            uri,
+            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+        )
+        prefs.edit()
+            .putString(KEY_LOCAL_SUBTITLE_LIBRARY_URI, uri.toString())
+            .putLong(KEY_LOCAL_SUBTITLE_LIBRARY_INDEXED_AT, 0L)
+            .apply()
+    }
+
+    fun getLocalSubtitleLibraryIndexedAt(): Long =
+        prefs.getLong(KEY_LOCAL_SUBTITLE_LIBRARY_INDEXED_AT, 0L)
+
+    fun saveLocalSubtitleLibraryIndexedAt(millis: Long) {
+        prefs.edit().putLong(KEY_LOCAL_SUBTITLE_LIBRARY_INDEXED_AT, millis).apply()
+    }
+
     fun getKnownLibraryRootUris(): Set<String> =
         (prefs.getStringSet(KEY_LIBRARY_ROOT_URI_HISTORY, emptySet()) ?: emptySet()) +
             listOfNotNull(getLibraryRootUri())
@@ -1408,6 +1435,8 @@ class AppSettingsRepository(context: Context) {
         const val KEY_HOME_SORT_OPTION = "home_sort_option"
         const val KEY_HOME_SORT_DIRECTION = "home_sort_direction"
         const val KEY_GUANGYA_RENAME_TEMPLATES = "guangya_rename_templates"
+        const val KEY_LOCAL_SUBTITLE_LIBRARY_URI = "local_subtitle_library_uri"
+        const val KEY_LOCAL_SUBTITLE_LIBRARY_INDEXED_AT = "local_subtitle_library_indexed_at"
         const val KEY_CLOUD_SORT_OPTION = "cloud_sort_option"
         const val KEY_CLOUD_SORT_ASCENDING = "cloud_sort_ascending"
         const val KEY_PLAYER_SEEK_BACK_SECONDS = "player_seek_back_seconds"
