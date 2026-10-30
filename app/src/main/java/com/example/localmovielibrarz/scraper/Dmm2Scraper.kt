@@ -122,7 +122,11 @@ class Dmm2Scraper(
                 if (attempt < retryCount - 1) delay(1500)
             }
         }
-        throw RuntimeException("DMM2 GraphQL 请求连续失败：${lastError?.message ?: lastError?.javaClass?.simpleName}")
+        throw RuntimeException(
+            "DMM2 GraphQL 请求连续失败：" +
+                "${lastError?.message ?: lastError?.javaClass?.simpleName}",
+            lastError
+        )
     }
 
     private fun selectBestSearchResult(contents: JSONArray, keyword: String): JSONObject {

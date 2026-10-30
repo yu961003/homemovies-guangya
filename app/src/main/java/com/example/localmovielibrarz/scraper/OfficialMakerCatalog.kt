@@ -137,8 +137,17 @@ object OfficialMakerCatalog {
             // peach 自己的 `SSIS`/`SONE` 并存写法——它是 S1 现行番号段，与 `soe` 不是同一段，两条都留。
             // 不写 `s1`：单字母前缀会把 `s1` 开头的别家番号一起认领，且本地没有一条 `s1` 番号证据。
             prefixes = listOf("ssis", "ssni", "snis", "sone", "soe"),
-            // 详情页/搜索页模板：S1 的站内搜索参数名与详情路径没有本地证据，留空。
-            note = "S1 NO.1 STYLE 的站；模板待补（S1 系是 Next.js，注意它可能在 application/json 里给数据）"
+            // 模板出处：2026-10-30 实测（curl + 浏览器 UA，出口为代理线路）。
+            // - 搜索：`/search/list?keyword=SNIS225` → 200 / 42678 B，结果页有 1 个
+            //   `works/detail/SNIS225` 链接与「全1作品」；`keyword=snis225` 同体；
+            //   而 `keyword=SNIS-225`（带连字符）只有 38608 B、0 个详情链接 → 站内搜索**只认 compact 写法**。
+            // - 详情：`/works/detail/SNIS225` → 200 / 75918 B，`<title>` 是作品名；
+            //   `/works/detail/snis-225` → 200 但 38067 B **空壳页**（无标题），所以模板也得用 compact。
+            // 顺带结论：S1 首页 `<form>` 数量为 0，`OfficialSearchForm` 的「回首页发现搜索表单」
+            // 兜底对它恒失败——这两条模板就是替代那条兜底的入口。
+            detailUrlTemplate = "/works/detail/{code_compact}",
+            searchUrlTemplate = "/search/list?keyword={code_compact}",
+            note = "S1 NO.1 STYLE 的站；模板已按实测补齐（compact 写法，连字符会命中空壳页）"
         ),
         site(
             id = "moodyz",

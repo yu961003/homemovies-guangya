@@ -160,6 +160,27 @@ object ScrapeFailureClassifier {
 
     private val httpCodeRegex = Regex("""HTTP\s*(\d{3})""", RegexOption.IGNORE_CASE)
 
+    /**
+     * 异常自带的 peach 档位（`PeachSourceFailure.reason` / `SourceFetchException.reason`）。
+     *
+     * 沿 cause 链找：包了一层仍然保留原始档位的场景很常见（例如 scraper 把传输异常包成
+     * 自己的失败对象）。找不到返回 null，由调用方落 [ScrapeFailureKind.Unknown]。
+     */
+    private fun structuredKind(error: Throwable): ScrapeFailureKind? {
+        var current: Throwable? = error
+        var depth = 0
+        while (current != null && depth < 8) {
+            when (current) {
+                is PeachSourceFailure -> return current.reason.toLocalKind()
+                is SourceFetchException -> return current.reason.toLocalKind()
+                else -> Unit
+            }
+            current = current.cause
+            depth += 1
+        }
+        return null
+    }
+
     fun fromThrowable(error: Throwable): ScrapeFailure {
         val text = buildString {
             append(error::class.java.simpleName)
@@ -245,7 +266,13 @@ object ScrapeFailureClassifier {
                 ScrapeFailureKind.Network
             lower.contains("不支持") || lower.contains("未启用") ||
                 lower.contains("必须以 http") -> ScrapeFailureKind.Config
-            else -> ScrapeFailureKind.Unknown
+            // 至此所有判据都认不出。若异常自己带了 peach 档位就用它——这是**确定**的信息，
+            // 而文案匹配只要消息里少/多一个字就会落空：DMM2 曾因「请求连续失败」比
+            // 「请求失败」多一个「连续」被归成 Unknown，而 Unknown 的冷却是 0 秒，
+            // 于是同一部片在一次刮削里被无冷却重打（`docs/SCRAPE-FAILURE-ANALYSIS-20261030.md` §三·③）。
+            // 放在最后而不是最前，是为了不覆盖上面那些**有意**的判定（例如「响应为空」按 Network
+            // 处理，让它能重试一次）。
+            else -> structuredKind(error) ?: ScrapeFailureKind.Unknown
         }
     }
 }

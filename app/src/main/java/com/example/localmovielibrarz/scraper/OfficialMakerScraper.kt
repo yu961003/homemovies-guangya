@@ -42,12 +42,36 @@ class OfficialMakerScraper(
         }
     }
 
+    /**
+     * 按来源收窄目录：`Faleno` 只问 FALENO 的站、`Dahlia` 只问 DAHLIA 的站，
+     * `MakerSite` 才是「按前缀问全部片商官网」。
+     *
+     * 之前三家共用同一份目录，于是 `SNIS-205` 被 FALENO/DAHLIA/片商官网三个来源
+     * **各问一次同一台 s1s1s1.com**：三次 30 秒超时（DNS 污染时）就足够把桃链 90 秒的
+     * 墙钟预算吃光，后面所有来源一个都没轮到。收窄之后同一台站只会被问一次。
+     *
+     * 收窄依据是**来源自己的站**（`OfficialMakerCatalog` 里 id 为 faleno / dahlia 的条目），
+     * 不是番号前缀：前缀只决定「这家有没有这部片」，决定不了「这次该问哪家」。
+     */
+    private fun catalogForSource(): List<OfficialMakerSite> {
+        val all = catalog()
+        val ownId = when (source) {
+            ScrapeSource.Faleno -> "faleno"
+            ScrapeSource.Dahlia -> "dahlia"
+            else -> return all
+        }
+        val own = all.filter { it.id == ownId }
+        // 目录里没有这一家（用户把内置条目删了）时退回全量：宁可多问一家，
+        // 也不要让这个来源变成「永远不出请求」的哑源。
+        return own.ifEmpty { all }
+    }
+
     override suspend fun scrape(number: String): ScrapedMovieInfo = withContext(ioDispatcher) {
         val code = ScraperResponseGuard.requireSafeScrapeNumber(number)
         val delegate = OfficialSiteScraper(
             fetcher = fetcher,
             source = source,
-            catalog = catalog,
+            catalog = ::catalogForSource,
             log = log
         )
         when (val result = delegate.scrape(code)) {

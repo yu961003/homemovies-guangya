@@ -42,6 +42,7 @@ import com.example.localmovielibrarz.scraper.ScrapeTaskJournal
 import com.example.localmovielibrarz.scraper.ScrapeTaskReport
 import com.example.localmovielibrarz.scraper.ScrapeEventLevel
 import com.example.localmovielibrarz.scraper.ScrapeSource
+import com.example.localmovielibrarz.scraper.PollutionSafeDns
 import com.example.localmovielibrarz.scraper.ScrapeProxySelector
 import com.example.localmovielibrarz.scraper.ScrapeRouteRules
 import com.example.localmovielibrarz.scraper.ScrapeSourceThrottle
@@ -106,9 +107,15 @@ class StrmScrapeRepository(
         // OkHttp 默认是 10s：跨境线路经代理转发时，一次 TCP + TLS 就要几秒，站点首字节慢一点
         // 就变成 SocketTimeoutException，而它会被归类成 Network——用户看到的就是「网络错误」。
         .proxySelector(ScrapeProxySelector(settingsRepository))
+        // 国内 DNS 会为部分站点投出 2001::/32（Teredo）这种不可路由地址，连接只能卡到
+        // connectTimeout 才失败。IPv4 优先 + 剔除 Teredo 是这一层唯一能做的补救。
+        .dns(PollutionSafeDns())
         .connectTimeout(SCRAPE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(SCRAPE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .writeTimeout(SCRAPE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        // 整体上限：connect/read/write 三个 30 秒可以叠加成 90 秒，而调用方按「一个来源
+        // 最多花多久」做预算（桃链 90 秒墙钟）。没有这一行，单个源就能吃掉整条链的预算。
+        .callTimeout(SCRAPE_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .connectionPool(HttpClients.sharedConnectionPool)
         .dispatcher(HttpClients.sharedDispatcher)
         .build(),
@@ -1610,6 +1617,15 @@ class StrmScrapeRepository(
 
         /** peach 的 REQUEST_TIMEOUT = 30.0（httpx 同一超时作用于 connect/read/write）。 */
         const val SCRAPE_TIMEOUT_SECONDS = 30L
+
+        /**
+         * 单次 HTTP 调用的整体上限（connect + TLS + 首字节 + body 读完）。
+         *
+         * 为什么不等于 [SCRAPE_TIMEOUT_SECONDS]：那个是**每一跳**的超时，三次跳可以叠成 90 秒；
+         * 而链路的预算口径是「一个来源最多占多久」。45 秒 = 一次跨境 TLS 握手（数秒）
+         * + 一页 1~4 MiB HTML 的传输（数秒~十几秒）+ 余量，正常页面远用不到。
+         */
+        const val SCRAPE_CALL_TIMEOUT_SECONDS = 45L
 
         /**
          * peach 的 NETWORK_RETRY_DELAYS = (2, 4, 6, 8)：只对**传输层失败**退避重试。
