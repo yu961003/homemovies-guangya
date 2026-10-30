@@ -19,6 +19,13 @@
 > 渲染面就绪，并有 `vo-configured` + mpv 日志双判据的自检把原因写进错误条。同一提交还把内核切换按钮
 > 收进顶栏（`MPV | EXO` 小药丸，不再挡字幕按钮），并补上 **hw+ / hw / sw** 三档硬解（播放模式 → 解码（MPV））。
 > 详见 `docs/MPV-BLACKSCREEN-HWDEC-20261030.md`。
+>
+> 🔍 **刮削失败复盘**（2026-10-30）：`SNIS-205` 这类「反复失败」分两层看——**该号在上游确实不存在**
+> （DMM GraphQL / S1 官网 / AVBase / TheJavDB 四个独立源交叉验证全为 0/404，换 `SNIS225`、`SSIS-001` 都正常），
+> 而**失败体验被工程缺陷放大**：桃链 90s 预算被单个源吃光、DMM2 异常丢 cause 归成 `Unknown`（冷却 0s 导致同片重打）、
+> 官网档四个来源其实是同一台 `s1s1s1.com`、S1 首页 `<form>` 为 0 使「回首页发现搜索框」恒失败，
+> 叠加国内 DNS 对该域投毒返回 `2001::/32` 黑洞地址。已于同一批提交修掉 7 处（含 S1 专用抽取档 `WorkPageTable`）。
+> 完整证据链与四类根因占比见 `docs/SCRAPE-FAILURE-ANALYSIS-20261030.md`。
 
 > 📦 **包名变更**：`com.example.localmovielibrary` → **`com.example.localmovielibrarz`**（全部 Kotlin package/import、namespace、applicationId、目录结构均已同步，含 test 目录）。
 
