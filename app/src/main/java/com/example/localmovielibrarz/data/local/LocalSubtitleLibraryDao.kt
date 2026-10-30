@@ -25,13 +25,27 @@ interface LocalSubtitleLibraryDao {
     suspend fun countByRoot(rootUri: String): Int
 
     /**
-     * 按番号列出字幕。
+     * 按番号列出字幕（限定单个库根）。
+     *
+     * 必须带 `libraryRootUri`：换库根后旧根的行不会自动消失（[replaceRoot] 只清当前根），
+     * 不带根过滤会把已撤销授权的 `content://` 行也搜出来，用户点开是「打不开文件」。
+     *
+     * 同番号多语言 / 多版本时大字幕优先：体积大的通常是未经二次压缩的原始字幕，
+     * 而且很多字幕文件名压根没写语言（`ABC-123.srt`），先把最完整的那份给用户。
+     */
+    @Query(
+        "SELECT * FROM local_subtitle_library WHERE movieNumber = :number AND libraryRootUri = :rootUri ORDER BY sizeBytes DESC"
+    )
+    suspend fun searchByNumber(number: String, rootUri: String): List<LocalSubtitleLibraryEntity>
+
+    /**
+     * 按番号列出字幕（不限定库根；仅供不依赖当前配置的诊断 / 迁移场景使用）。
      *
      * 同番号多语言 / 多版本时大字幕优先：体积大的通常是未经二次压缩的原始字幕，
      * 而且很多字幕文件名压根没写语言（`ABC-123.srt`），先把最完整的那份给用户。
      */
     @Query("SELECT * FROM local_subtitle_library WHERE movieNumber = :number ORDER BY sizeBytes DESC")
-    suspend fun searchByNumber(number: String): List<LocalSubtitleLibraryEntity>
+    suspend fun searchByNumberAnyRoot(number: String): List<LocalSubtitleLibraryEntity>
 
     /**
      * 按文件名模糊搜索。

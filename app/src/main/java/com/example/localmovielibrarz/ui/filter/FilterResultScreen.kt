@@ -50,6 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.localmovielibrarz.data.local.MovieEntity
 import com.example.localmovielibrarz.ui.home.HomeImageMode
 import com.example.localmovielibrarz.ui.shared.MovieArtwork
+import com.example.localmovielibrarz.ui.shared.Top250ArtworkBadge
 import com.example.localmovielibrarz.util.extractMovieNumberInfo
 import com.example.localmovielibrarz.util.partSortKey
 import kotlinx.coroutines.flow.collectLatest
@@ -254,11 +255,15 @@ private fun ResultPosterCard(movie: MovieEntity, imageMode: HomeImageMode, onCli
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
-            MovieArtwork(
-                movie = movie,
-                preferThumb = imageMode == HomeImageMode.Thumb,
-                modifier = Modifier.fillMaxSize(),
-            )
+            androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxSize()) {
+                MovieArtwork(
+                    movie = movie,
+                    preferThumb = imageMode == HomeImageMode.Thumb,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                // 与首页影片卡片同一枚榜单角标（同源 CompositionLocal、同一个开关）。
+                Top250ArtworkBadge(movie)
+            }
         }
         Spacer(Modifier.height(8.dp))
         Text(

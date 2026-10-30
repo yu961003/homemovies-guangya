@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import com.example.localmovielibrarz.data.local.MovieEntity
 import com.example.localmovielibrarz.ui.home.HomeImageMode
 import com.example.localmovielibrarz.ui.shared.MovieArtwork
+import com.example.localmovielibrarz.ui.shared.Top250ArtworkBadge
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.collectLatest
 import com.example.localmovielibrarz.ui.ContentAlphaMin
@@ -161,11 +162,15 @@ private fun FavoritePosterCard(movie: MovieEntity, imageMode: HomeImageMode, onC
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
-            MovieArtwork(
-                movie = movie,
-                preferThumb = imageMode == HomeImageMode.Thumb,
-                modifier = Modifier.fillMaxSize(),
-            )
+            androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxSize()) {
+                MovieArtwork(
+                    movie = movie,
+                    preferThumb = imageMode == HomeImageMode.Thumb,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                // 与首页影片卡片同一枚榜单角标（同源 CompositionLocal、同一个开关）。
+                Top250ArtworkBadge(movie)
+            }
         }
         Spacer(Modifier.height(8.dp))
         Text(

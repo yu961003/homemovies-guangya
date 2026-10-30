@@ -54,11 +54,15 @@ class LocalSubtitleLibraryRepository(
     /**
      * 按番号找字幕。番号走和影片库同一套 [normalizeMovieNumber]，所以 `AB-12` / `ab012` /
      * `[组]AB-12.chs.srt` 都能对上同一行索引。
+     *
+     * 只查当前库根：换过库根之后旧根的行还留在表里（[scanAndIndex] 只替换当前根），
+     * 不加根过滤会搜出已经失去授权的 `content://`，用户点开只能看到「打不开」。
      */
     suspend fun searchByNumber(number: String): List<LocalSubtitleFile> {
         if (number.isBlank()) return emptyList()
+        val root = libraryRootUri()?.toString() ?: return emptyList()
         val key = normalizeMovieNumber(number) ?: number.trim().uppercase()
-        return dao.searchByNumber(key).mapNotNull { entity ->
+        return dao.searchByNumber(key, root).mapNotNull { entity ->
             runCatching { Uri.parse(entity.uri) }
                 .getOrNull()
                 ?.let { uri -> LocalSubtitleFile(name = entity.fileName, uri = uri) }

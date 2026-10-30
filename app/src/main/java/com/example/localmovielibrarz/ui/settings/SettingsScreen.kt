@@ -109,6 +109,7 @@ import com.example.localmovielibrarz.data.local.CloudVideoTaskEntity
 import com.example.localmovielibrarz.data.local.CloudVideoTaskStatus
 import com.example.localmovielibrarz.data.repository.AppSettingsRepository
 import com.example.localmovielibrarz.data.repository.DailyUsageStats
+import com.example.localmovielibrarz.data.repository.Top250State
 import com.example.localmovielibrarz.data.repository.UsageStatsRepository
 import com.example.localmovielibrarz.scraper.CustomJsonScrapeConfig
 import com.example.localmovielibrarz.scraper.CustomJsonPathCandidate
@@ -150,6 +151,7 @@ private enum class SettingsPage {
     CustomJsonScrape,
     NumberRecognition,
     ScrapeTasks,
+    TopRanking,
     Player,
     PlayerSubtitle,
     PlayerProgressBar,
@@ -355,7 +357,7 @@ fun SettingsScreen(
                     SettingsPage.Cloud -> CloudSettingsPage(
                         uiState = uiState,
                         guangyaLoginViewModel = guangyaLoginViewModel,
-                        onOpenGuangyaBrowser = onOpenGuangyaBrowser
+                        onOpenGuangyaBrowser = onOpenGuangyaBrowser,
                         onCloud115AppSelected = viewModel::selectCloud115LoginApp,
                         onSavedCloud115AccountSelected = viewModel::applySavedCloud115Account,
                         onSavedCloud115AccountDelete = viewModel::deleteSavedCloud115Account,
@@ -369,6 +371,8 @@ fun SettingsScreen(
                         onRemoveExcludedVideoName = viewModel::removeExcludedVideoName,
                         onCloudScrapeSkipBelowSizeMbChange = viewModel::updateCloudScrapeSkipBelowSizeMb
                     )
+
+                    SettingsPage.TopRanking -> TopRankingSettingsPage()
 
                     SettingsPage.Scrape -> ScrapeSettingsPage(
                         uiState = uiState,
@@ -982,6 +986,7 @@ private fun SettingsPage.titleText(): String = when (this) {
     SettingsPage.CustomJsonScrape -> "自定义 JSON 刮削"
     SettingsPage.NumberRecognition -> "番号识别规则"
     SettingsPage.ScrapeTasks -> "刮削任务"
+    SettingsPage.TopRanking -> "JavDB TOP 榜单"
     SettingsPage.Player -> "播放器设置"
     SettingsPage.PlayerSubtitle -> "外挂字幕"
     SettingsPage.PlayerProgressBar -> "进度条"
@@ -1030,6 +1035,11 @@ private fun SettingsOverviewPage(
             title = "番号识别规则",
             subtitle = "忽略后缀 ${uiState.numberRecognitionIgnoredSuffixes.size} · 分段标记 ${uiState.numberRecognitionPartMarkers.size}",
             onClick = { onOpenPage(SettingsPage.NumberRecognition) }
+        )
+        SettingsEntryRow(
+            title = "JavDB TOP 榜单",
+            subtitle = "榜单名次、卡片角标与数据源地址",
+            onClick = { onOpenPage(SettingsPage.TopRanking) }
         )
         SettingsEntryRow(
             title = "刮削日志",
@@ -1446,7 +1456,12 @@ private fun PlayerColorGradeSettingsPage(
                 style = MaterialTheme.typography.bodySmall
             )
             Text(
-                text = "· 参考实现里的「自动分析片源并搜参」未移植：它依赖 Windows 截屏（mss）与 OpenCV 人脸检测，Android 侧无等价物。",
+                text = "· 自动分析调参已内置：mpv 内核播放时点播放页右侧「调色」段里的「自动分析调参」，会截取当前帧分析肤色与亮度，自动回填参数。",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = "· 下发失败（设备不支持 / 路径不可读 / 内核未走 gpu-next）时播放页「调色」段会显示具体原因，不会静默失效。",
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
                 style = MaterialTheme.typography.bodySmall
             )
@@ -1607,6 +1622,137 @@ private fun LocalSubtitleLibrarySettingsPage(
             )
             Text(
                 text = "· 不出网、不下载：选中后直接把文件交给播放器挂载，省流量也更快。",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
+
+@Composable
+private fun TopRankingSettingsPage() {
+    val context = LocalContext.current
+    val app = context.applicationContext as LocalMovieLibraryApp
+    val settingsRepository = app.container.settingsRepository
+    val repository = app.container.top250RankingRepository
+    val scope = rememberCoroutineScope()
+
+    val state by repository.state.collectAsStateWithLifecycle()
+    var badgeEnabled by remember { mutableStateOf(settingsRepository.isCardTopGoldBadgeEnabled()) }
+    var endpoint by remember { mutableStateOf(settingsRepository.top250Endpoint()) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var refreshing by remember { mutableStateOf(false) }
+
+    SettingsGroupCard(title = "卡片标识") {
+        SettingsSwitchRow(
+            title = "显示 TOP 名次角标",
+            subtitle = "命中榜单的影片在卡片左上角显示名次，关闭后完全不显示",
+            checked = badgeEnabled,
+            onCheckedChange = {
+                badgeEnabled = it
+                settingsRepository.saveCardTopGoldBadgeEnabled(it)
+            }
+        )
+    }
+
+    SettingsGroupCard(title = "榜单数据") {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = when (val s = state) {
+                    is Top250State.Ready -> "已加载 ${s.ranks.size} 条名次" +
+                        if (s.fromCache) "（来自本地缓存）" else "（来自网络）"
+                    is Top250State.Loading -> "正在刷新…"
+                    is Top250State.Error -> "刷新失败：${s.message}"
+                    else -> "尚未加载榜单"
+                },
+                style = MaterialTheme.typography.bodyMedium
+            )
+            repository.cacheStatus().let { status ->
+                Text(
+                    text = "本地缓存 ${status.cachedCount} 条" +
+                        if (status.fetchedAtMillis > 0) " · 更新于 ${formatTopRankTime(status.fetchedAtMillis)}" else "",
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Button(
+                onClick = {
+                    if (refreshing) return@Button
+                    refreshing = true
+                    message = null
+                    scope.launch {
+                        val result = repository.refresh()
+                        refreshing = false
+                        message = if (result.success) {
+                            // 命中数需要影片列表，设置页不持有影片库，这里只报榜单条数，
+                            // 避免把「榜单 250 条」误写成「库内命中 250 条」。
+                            "刷新完成：榜单共 ${result.total} 条，已写入本地缓存"
+                        } else {
+                            "刷新失败：${result.error ?: "未知错误"}"
+                        }
+                    }
+                },
+                enabled = !refreshing,
+                modifier = Modifier.fillMaxWidth(),
+                shape = AppRadius.LG
+            ) {
+                Text(if (refreshing) "正在刷新…" else "立即刷新榜单")
+            }
+            message?.let {
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+
+    SettingsGroupCard(title = "数据源") {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedTextField(
+                value = endpoint,
+                onValueChange = { endpoint = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                shape = AppRadius.LG,
+                label = { Text("榜单地址") }
+            )
+            Text(
+                text = "留空或填非 http(s) 地址会回落到内置地址。镜像不可用时可以换成自己的同构接口。",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+                style = MaterialTheme.typography.bodySmall
+            )
+            Button(
+                onClick = { settingsRepository.saveTop250Endpoint(endpoint) },
+                modifier = Modifier.fillMaxWidth(),
+                shape = AppRadius.LG
+            ) {
+                Text("保存地址")
+            }
+        }
+    }
+
+    SettingsGroupCard(title = "说明") {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "· 名次按番号匹配：uniqueIds、文件名、标题依次尝试，与番号识别规则同源。",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = "· 启动只读本地缓存，不联网；榜单一天一更，需要新数据时手动刷新。",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = "· 刷新失败会保留上一次的成功结果，不会把已有角标清空。",
                 style = MaterialTheme.typography.bodySmall
             )
         }
@@ -4823,6 +4969,19 @@ private fun rememberTreePicker(onPicked: (Uri) -> Unit) =
             onPicked(uri)
         }
     }
+
+private fun formatTopRankTime(millis: Long): String {
+    if (millis <= 0L) return "—"
+    val calendar = java.util.Calendar.getInstance().apply { timeInMillis = millis }
+    return String.format(
+        "%04d-%02d-%02d %02d:%02d",
+        calendar.get(java.util.Calendar.YEAR),
+        calendar.get(java.util.Calendar.MONTH) + 1,
+        calendar.get(java.util.Calendar.DAY_OF_MONTH),
+        calendar.get(java.util.Calendar.HOUR_OF_DAY),
+        calendar.get(java.util.Calendar.MINUTE)
+    )
+}
 
 private fun formatCacheSize(bytes: Long): String {
     val kb = bytes / 1024.0

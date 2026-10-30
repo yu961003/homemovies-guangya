@@ -88,6 +88,7 @@ import com.example.localmovielibrarz.ui.search.SearchScreen
 import com.example.localmovielibrarz.ui.search.SearchViewModel
 import com.example.localmovielibrarz.ui.settings.SettingsScreen
 import com.example.localmovielibrarz.ui.settings.SettingsViewModel
+import com.example.localmovielibrarz.ui.shared.Top250BadgeProvider
 import kotlinx.coroutines.delay
 
 @Composable
@@ -174,6 +175,8 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
     }
 
     HomeMovieTheme(useLightTheme = useLightTheme) {
+    // 榜单角标：在主题内、Scaffold 外下发一次，所有影片卡片共享同一份名次表。
+    Top250BadgeProvider {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -575,6 +578,7 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                 }
             }
         }
+    }
     }
 
     if (showStartupAnimation) {

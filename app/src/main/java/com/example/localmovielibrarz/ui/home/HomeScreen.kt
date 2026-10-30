@@ -90,6 +90,7 @@ import com.example.localmovielibrarz.scraper.ActorAvatarStore
 import com.example.localmovielibrarz.ui.shared.ListEndHint
 import com.example.localmovielibrarz.ui.shared.LoadingState
 import com.example.localmovielibrarz.ui.shared.MovieArtwork
+import com.example.localmovielibrarz.ui.shared.Top250ArtworkBadge
 import com.example.localmovielibrarz.ui.shared.UriImage
 import com.example.localmovielibrarz.util.metadataKey
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -1479,6 +1480,8 @@ fun MoviePosterCard(
     onToggleWatched: () -> Unit
 ) {
     var menuExpanded by remember(movie.id) { mutableStateOf(false) }
+    // 榜单角标是横切能力：由 AppRoot 通过 CompositionLocal 下发，卡片自身只负责画。
+    // 榜单角标由 Top250ArtworkBadge 叠层自己读取上下文，这里无需再取。
     val cardModifier = if (width == Dp.Unspecified) Modifier else Modifier.width(width)
     // 批量模式下点击/长按都切换选择；普通模式保持原有行为（显式类型避免 if-else 推断为 Any）
     val cardClick: () -> Unit = if (batchMode) onToggleSelect else onClick
@@ -1511,6 +1514,9 @@ fun MoviePosterCard(
                         preferThumb = imageMode == HomeImageMode.Thumb,
                         modifier = Modifier.fillMaxSize(),
                     )
+                    if (!batchMode) {
+                        Top250ArtworkBadge(movie)
+                    }
                     if (movie.isFavorite && !batchMode) {
                         Icon(
                             imageVector = Icons.Rounded.Favorite,

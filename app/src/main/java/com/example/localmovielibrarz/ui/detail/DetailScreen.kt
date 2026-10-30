@@ -90,6 +90,9 @@ import com.example.localmovielibrarz.scraper.ActorAvatarStore
 import com.example.localmovielibrarz.scraper.ScrapeEventLevel
 import com.example.localmovielibrarz.scraper.ScrapeTaskReport
 import com.example.localmovielibrarz.scraper.ScrapeTaskStatus
+import com.example.localmovielibrarz.ui.shared.LocalTop250BadgeEnabled
+import com.example.localmovielibrarz.ui.shared.LocalTop250RankOf
+import com.example.localmovielibrarz.ui.shared.Top250RankBadge
 import com.example.localmovielibrarz.ui.shared.UriImage
 import com.example.localmovielibrarz.ui.shared.artworkCacheRevision
 import com.example.localmovielibrarz.util.detectMovieVariant
@@ -573,6 +576,13 @@ private fun MobileHeroImage(movie: MovieEntity) {
 @Composable
 private fun MobileTitleBlock(movie: MovieEntity, onGenreClick: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // 榜单名次：命中 JavDB TOP 榜单时在标题上方补一枚角标，
+        // 与影片卡片的左上角角标同源（LocalTop250RankOf），开关也共享同一个设置项。
+        val top250BadgeEnabled = LocalTop250BadgeEnabled.current
+        val top250Rank = LocalTop250RankOf.current(movie)
+        if (top250BadgeEnabled && top250Rank != null) {
+            Top250RankBadge(rank = top250Rank)
+        }
         Text(
             text = movie.title,
             color = MaterialTheme.colorScheme.onSurface,

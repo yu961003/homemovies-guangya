@@ -26,6 +26,7 @@ import com.example.localmovielibrarz.data.repository.MovieScrapeTaskRunner
 import com.example.localmovielibrarz.subtitle.LocalSubtitleLibraryRepository
 import com.example.localmovielibrarz.data.repository.SourceHealthRepository
 import com.example.localmovielibrarz.data.repository.TaskRunRepository
+import com.example.localmovielibrarz.data.repository.Top250RankingRepository
 import com.example.localmovielibrarz.scraper.ScrapeSourceHealthTracker
 import com.example.localmovielibrarz.diagnostics.RuntimeErrorLog
 import com.example.localmovielibrarz.data.repository.PlaybackProgressRepository
@@ -126,6 +127,18 @@ class AppContainer(context: Context) {
         movieDao = database.movieDao(),
         settingsRepository = settingsRepository
     )
+    /**
+     * JavDB TOP 榜单（来自 5.0.5）。
+     *
+     * 懒加载：没开启角标、也没在设置页刷过榜单的用户永远不付出实例化成本。
+     * 它自己维护内存里的名次表和一份磁盘缓存，所以整个 App 只需要一个实例。
+     */
+    val top250RankingRepository by lazy {
+        Top250RankingRepository(
+            context = appContext,
+            settingsRepository = settingsRepository
+        )
+    }
     val cloud115StrmRepository by lazy {
         Cloud115StrmRepository(
             context = appContext,

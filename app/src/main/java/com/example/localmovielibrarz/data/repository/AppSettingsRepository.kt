@@ -753,6 +753,49 @@ class AppSettingsRepository(context: Context) {
         prefs.edit().putBoolean(KEY_CLOUD_DELETE_ENABLED, enabled).apply()
     }
 
+    // ===== JavDB TOP 榜单 =====
+
+    /**
+     * 榜单端点。空串或非法值回落到默认端点：这个值由用户在设置页手填，
+     * 允许填错但不允许把功能整体弄坏，所以读的时候做一次兜底。
+     */
+    fun top250Endpoint(): String {
+        val saved = prefs.getString(KEY_TOP250_ENDPOINT, null)?.trim().orEmpty()
+        return if (saved.startsWith("http://") || saved.startsWith("https://")) {
+            saved
+        } else {
+            DEFAULT_TOP250_ENDPOINT
+        }
+    }
+
+    fun saveTop250Endpoint(endpoint: String) {
+        prefs.edit().putString(KEY_TOP250_ENDPOINT, endpoint.trim()).apply()
+    }
+
+    /** 卡片 TOP 角标开关，默认开启：榜单是纯增量信息，不挡视线就该默认可见。 */
+    fun isCardTopGoldBadgeEnabled(): Boolean =
+        prefs.getBoolean(KEY_CARD_TOP_GOLD_BADGE_ENABLED, true)
+
+    fun saveCardTopGoldBadgeEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_CARD_TOP_GOLD_BADGE_ENABLED, enabled).apply()
+    }
+
+    /**
+     * 角标开关的响应式读法。
+     *
+     * 卡片角标在首页组合树的最外层决定是否参与布局，用 Flow 而不是
+     * 「设置页返回时重读」：返回键路径有多个（系统返回、手势返回、
+     * 底部导航切页），逐个挂重读点必然漏掉其中一条。
+     */
+    fun observeCardTopGoldBadgeEnabled(): Flow<Boolean> = callbackFlow {
+        trySend(isCardTopGoldBadgeEnabled())
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == KEY_CARD_TOP_GOLD_BADGE_ENABLED) trySend(isCardTopGoldBadgeEnabled())
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
     fun getCloudExcludedVideoNames(): Set<String> =
         (prefs.getStringSet(KEY_CLOUD_EXCLUDED_VIDEO_NAMES, null) ?: DEFAULT_CLOUD_EXCLUDED_VIDEO_NAMES)
             .map { it.trim() }
@@ -1338,6 +1381,20 @@ class AppSettingsRepository(context: Context) {
         const val KEY_LUT_ENABLED = "lut_enabled"
         const val KEY_LUT_SIZE = "lut_size"
         const val KEY_LUT_STRENGTH = "lut_strength"
+
+        /**
+         * JavDB TOP 榜单端点。
+         *
+         * 与 4.0.0 的 `javdb_api_url` 同样是可配置项：镜像站点会换域名，
+         * 写死端点意味着一次域名迁移就让功能整体失效。
+         */
+        const val KEY_TOP250_ENDPOINT = "top250_endpoint"
+
+        /** 影片卡片左上角的 TOP 榜角标开关（对应 5.0.5 的 card_top_gold_badge_enabled）。 */
+        const val KEY_CARD_TOP_GOLD_BADGE_ENABLED = "card_top_gold_badge_enabled"
+
+        /** 榜单默认端点：5.0.5 实际使用的 `top250/` 子路径。 */
+        const val DEFAULT_TOP250_ENDPOINT = "https://catembylegacy.fastcdn.dpdns.org/top250/"
         const val PLAYER_ENGINE_EXO = "exo"
         const val PLAYER_ENGINE_MPV = "mpv"
         const val KEY_HOME_IMAGE_MODE = "home_image_mode"
