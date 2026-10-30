@@ -35,8 +35,16 @@ object MpvOptions {
         caFilePath: String?,
     ): List<Pair<String, String>> = buildList {
         // ── 渲染 ───────────────────────────────────────────────────────────────
-        // exo: PlayerView 默认 SurfaceView 输出。mpv 对应 vo=gpu + android context。
-        add("vo" to "gpu")
+        // exo: PlayerView 默认 SurfaceView 输出。mpv 对应 vo=gpu-next + android context。
+        //
+        // 必须用 gpu-next 而不是 gpu：`target-lut`（实时调色）这个属性只由 vo_gpu_next
+        // 注册（mpv 上游 video/out/vo_gpu_next.c 的 `{"target-lut", OPT_STRING(...)}`），
+        // vo_gpu 的选项表里根本没有它。用 vo=gpu 时 setString("target-lut", …) 恒返回
+        // -8 MPV_ERROR_PROPERTY_NOT_FOUND，画面当然没变化。随包 libmpv.so 里
+        // `target-lut` 字符串只出现一次、且紧邻 `../video/out/vo_gpu_next.c:2047`，
+        // 与上游源码一致。gpu-next 与 gpu 共用 opengl context（context_android.c），
+        // 所以 gpu-context=android 照样有效。
+        add("vo" to "gpu-next")
         add("gpu-context" to "android")
         // 硬件解码：exo 侧是 DefaultRenderersFactory 硬解优先 + 解码器回退（EXTENSION_RENDERER_MODE_PREFER）。
         // mpv 对应 hwdec=mediacodec（copy 模式兼容性最好），软解作为内部回退。

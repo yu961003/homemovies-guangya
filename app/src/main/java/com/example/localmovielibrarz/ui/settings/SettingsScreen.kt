@@ -1240,7 +1240,7 @@ private fun PlayerSettingsPage(
         )
         SettingsEntryRow(
             title = "实时调色",
-            subtitle = uiState.lutSettings.entrySubtitle(),
+            subtitle = uiState.lutSettings.entrySubtitle(onMpv = uiState.defaultPlaybackEngineIsMpv),
             onClick = onOpenColorGrade
         )
     }
@@ -1253,8 +1253,9 @@ private fun PlayerSettingsPage(
  * ——用户可能把滑杆全推回 0 却没关开关，此时画面其实没变化，副标题若写「已开启」
  * 会让人以为坏了。
  */
-private fun LutSettings.entrySubtitle(): String = when {
+private fun LutSettings.entrySubtitle(onMpv: Boolean): String = when {
     !enabled -> "关闭 · 仅 mpv 内核实时调色（LUT）"
+    !onMpv -> "已开启 · 但默认内核是 ExoPlayer，调色只在 MPV 内核生效"
     shouldApply -> "已开启 · ${lutSize}³ LUT · 强度 $strengthPercent% · 点击调整"
     else -> "已开启但参数为默认值 · 画面无变化"
 }

@@ -747,7 +747,11 @@ class MpvPlaybackEngine(
                         Log.w(TAG, "LUT 生成失败，保持当前 LUT 不变")
                         return@post
                     }
-                    MPVLib.setString("target-lut", "")
+                    if (!applyTargetLut("")) {
+                        // 空串也下发失败，说明这个内核根本没有 target-lut 属性；
+                        // 别把签名记成「已清空」，否则下次真开启时会被签名短路拦住。
+                        return@post
+                    }
                     lastLutSignature = signature
                     Log.i(TAG, "实时调色已关闭，target-lut 已清空")
                     return@post
@@ -756,7 +760,11 @@ class MpvPlaybackEngine(
                 // mpv 在 Android 上以 POSIX 路径解析，正斜杠是唯一安全写法
                 // （参考实现也做了 `.replace("\\", "/")`，见 mpv_realtime_lut.py:1686）。
                 val path = file.absolutePath.replace('\\', '/')
-                MPVLib.setString("target-lut", path)
+                if (!applyTargetLut(path)) {
+                    // 下发失败绝不能记签名，也不能打「已下发」——旧实现正是在这里
+                    // 把 -8（属性不存在）吞掉，导致设置页显示已开启、画面毫无变化。
+                    return@post
+                }
                 lastLutSignature = signature
                 Log.i(TAG, "已下发 LUT：${file.name}（${file.length()} 字节）")
             }
@@ -766,6 +774,36 @@ class MpvPlaybackEngine(
             Log.d(TAG, "LUT 任务未能提交（引擎已释放）：${it.message}")
         }
     }
+
+    /**
+     * 下发 `target-lut` 并如实回报结果。
+     *
+     * 返回 false 表示这次调色没有真正作用到画面上：属性不存在（vo 不是 gpu-next）、
+     * 路径不可读、或引擎已释放。调用方据此决定要不要记签名、要不要通知 UI。
+     */
+    private fun applyTargetLut(path: String): Boolean {
+        val ret = MPVLib.setString("target-lut", path)
+        if (ret >= 0) {
+            lutUnavailableReason = null
+            return true
+        }
+        val reason = when (ret) {
+            MPVLib.MPV_ERROR_PROPERTY_NOT_FOUND -> "当前渲染后端不提供 target-lut（--vo 需要 gpu-next）"
+            else -> "下发 target-lut 失败：${MPVLib.errorName(ret)}（$ret）"
+        }
+        lutUnavailableReason = reason
+        Log.w(TAG, "实时调色未生效：$reason")
+        lutFailureReporter?.invoke(reason)
+        return false
+    }
+
+    /** 最近一次调色下发失败的原因；成功后清空。供 UI 显示「为什么没效果」。 */
+    @Volatile
+    var lutUnavailableReason: String? = null
+        private set
+
+    /** 把调色下发失败回报给 UI（只在该失败首次出现时回调，避免滑杆拖动刷屏）。 */
+    var lutFailureReporter: ((String) -> Unit)? = null
 
     /** 当前生效的 LUT 签名，供诊断与测试断言。 */
     fun currentLutSignature(): String? = lastLutSignature
@@ -855,7 +893,7 @@ class MpvPlaybackEngine(
      * 只在用户选了 [MpvHwdecMode.AUTO] 时动作，手动选了三档里的任何一档都不干预
      * （否则会出现「我明明选了软解，它自己变回硬解」）。
      *
-     * 判定依据是 mpv 的 `video-params/*`：primaries 命中 bt.2020（HDR10 / DV 的常见色域）
+     * 判定依据是 mpv 的 `video-params/` 下的属性：primaries 命中 bt.2020（HDR10 / DV 的常见色域）
      * 或 gamma 命中 pq / hlg 时，说明片源是 HDR，零拷贝直出更省电且能吃到 HDR 通路；
      * 其余一律走回拷贝，兼容性优先。桥接不可用时 MpvOptions.resolveHwdecValue
      * 会把 mediacodec* 降成 no，这里不需要重复判断。

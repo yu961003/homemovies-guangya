@@ -53,6 +53,12 @@ object MPVLib {
     const val MPV_ERROR_NOMEM = -2
     const val MPV_ERROR_UNINITIALIZED = -3
     const val MPV_ERROR_INVALID_PARAMETER = -4
+
+    /**
+     * `mpv_set_property_string("target-lut", …)` 在 vo 不是 gpu-next 时会返回这个码。
+     * 单独提出来是因为实时调色的「开了没效果」全从这个码开始。
+     */
+    const val MPV_ERROR_PROPERTY_NOT_FOUND = -8
     const val MPV_ERROR_COMMAND = -12
     const val MPV_ERROR_LOADING_FAILED = -13
     const val MPV_ERROR_AO_INIT_FAILED = -14
@@ -71,7 +77,7 @@ object MPVLib {
         -5 -> "OPTION_NOT_FOUND"
         -6 -> "OPTION_FORMAT"
         -7 -> "OPTION_ERROR"
-        -8 -> "PROPERTY_NOT_FOUND"
+        MPV_ERROR_PROPERTY_NOT_FOUND -> "PROPERTY_NOT_FOUND"
         -9 -> "PROPERTY_FORMAT"
         -10 -> "PROPERTY_UNAVAILABLE"
         -11 -> "PROPERTY_ERROR"

@@ -80,7 +80,7 @@ enum class MpvHwdecMode(
     /**
      * 自动：按片源特征在 [HW_PLUS] / [HW] / [SW] 之间挑一档（默认档）。
      *
-     * 判定发生在 `MPV_EVENT_FILE_LOADED` 之后（此时 `video-params/*` 才有值）：
+     * 判定发生在 `MPV_EVENT_FILE_LOADED` 之后（此时 `video-params/` 下的属性 才有值）：
      * HDR / 广色域（bt.2020、pq、hlg）优先零拷贝，普通 SDR 走回拷贝，
      * 桥接不可用时由 MpvOptions.resolveHwdecValue 降级到软解。
      * mpvValue 给的是「装载期先用的保守值」——回拷贝一定出得起画面。

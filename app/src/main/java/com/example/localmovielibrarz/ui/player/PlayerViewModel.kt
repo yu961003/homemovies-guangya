@@ -1932,6 +1932,9 @@ class PlayerViewModel(
         startMpvProgressSaver(engine)
         // mpv 侧丢帧观测：exo 走 VideoDecoderCounters，mpv 只能查自己的三个计数属性，
         // 统一折成 player.mpv.frames 事件写进诊断日志，两份内核的卡顿才有可比口径。
+        engine.lutFailureReporter = { reason ->
+            _uiState.update { it.copy(lutAutoTuneMessage = "实时调色未生效：$reason") }
+        }
         engine.frameStatsReporter = { stats ->
             logPlaybackEvent(
                 "player.mpv.frames",

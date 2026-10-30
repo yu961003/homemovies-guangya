@@ -33,11 +33,23 @@ object LutSkinAnalyzer {
     /** 少于这么多皮肤像素就认为「这一帧没有可用肤色」。参考实现 `min_skin_pixels = 150`。 */
     const val MIN_SKIN_PIXELS = 150
 
-    /** 中心区域占画面的比例（参考实现兜底路径是 0.9，这里更严格）。 */
-    const val CENTER_ROI_RATIO = 0.5
+    /**
+     * 中心区域占画面的比例。
+     *
+     * 曾经是 0.5（只取正中 25% 面积），但本应用没有做人脸检测、只按「中心区域」兜底，
+     * 而日式片源的脸经常偏到画面一侧，0.5 会导致「明明有脸却提示没找到人脸」。
+     * 现在取全画面 1.0：把「找肤色」交给后面的判据，不再靠裁框赌构图。
+     */
+    const val CENTER_ROI_RATIO = 1.0
 
-    /** 中心区域的肤色亮度上限；人脸区域用 [LutSkinStats.FACE_SKIN_LUM_MAX]。 */
-    const val CENTER_SKIN_LUM_MAX = 0.72
+    /**
+     * 肤色亮度上限。
+     *
+     * 曾经是 0.72，比参考实现的人脸区域上限（`LutSkinStats.FACE_SKIN_LUM_MAX = 0.9`）
+     * 严得多：正常曝光的肤色 (230,195,170) 亮度约 0.787，会被整片跳过，于是恒返回
+     * 「没检测到足够肤色像素」。既然这里走的是没有关键点的兜底路径，就应当用同一档上限。
+     */
+    const val CENTER_SKIN_LUM_MAX = 0.90
 
     /** 高光像素阈值，用于统计 highPixelCount / highRb。参考实现 `lum > 0.70`。 */
     const val HIGH_PIXEL_LUM = 0.70
@@ -58,7 +70,14 @@ object LutSkinAnalyzer {
     private const val SKIN_MIN_RB = 1.05
     private const val SKIN_MAX_RB = 1.90
     private const val SKIN_MIN_RG = 1.05
-    private const val SKIN_MAX_RG = 1.25
+
+    /**
+     * R/G 上限。
+     *
+     * 1.25 只覆盖很冷的肤色；亚洲片源常见的偏暖肤色 R/G 约 1.3，会直接出局。
+     * 放宽到 1.40 仍能挡掉纯红物体（R/G 通常 > 1.5）。
+     */
+    private const val SKIN_MAX_RG = 1.40
 
     /**
      * 分析一帧。
