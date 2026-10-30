@@ -2,6 +2,7 @@ package com.example.localmovielibrarz.playback.engine
 
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -170,10 +171,24 @@ class MpvHttpProxyTest {
         val port = proxy.port
         proxy.close()
 
-        val failed = runCatching {
-            Socket("127.0.0.1", port).use { it.soTimeout = 1000 }
-        }.isFailure
-        assertTrue("close() 之后端口不该还能连上", failed)
+        // close() 返回不等于端口立刻拒绝连接：内核 backlog 里已经完成三次握手的连接
+        // 仍可能被 accept 接住。本测试原先直接断言「立刻连不上」，在 CI 上偶发失败
+        // （断言是时序依赖的，不是 close() 真的没生效）。语义应当是「最终不再接受新连接」，
+        // 所以这里给一个有界收敛窗口，超时才算失败。
+        val deadline = System.nanoTime() + CLOSE_CONVERGE_TIMEOUT_MS * 1_000_000
+        var stillConnectable = true
+        while (System.nanoTime() < deadline) {
+            val result = runCatching { Socket("127.0.0.1", port).use { it.soTimeout = 200 } }
+            if (result.isFailure) {
+                stillConnectable = false
+                break
+            }
+            Thread.sleep(CLOSE_CONVERGE_POLL_MS)
+        }
+        assertFalse(
+            "close() 之后 ${CLOSE_CONVERGE_TIMEOUT_MS}ms 内端口仍能连上（backlog 未被回收）",
+            stillConnectable
+        )
         assertNull("close() 之后不该还能登记上游", proxy.register("${upstream.baseUrl}/x.mp4", emptyMap()))
     }
 
@@ -398,3 +413,10 @@ class MpvHttpProxyTest {
         }
     }
 }
+
+/** close() 之后端口停止接受新连接的收敛窗口上限（避开内核 backlog 的竞态）。 */
+private const val CLOSE_CONVERGE_TIMEOUT_MS = 3_000L
+
+/** 收敛窗口内轮询间隔。 */
+private const val CLOSE_CONVERGE_POLL_MS = 50L
+
