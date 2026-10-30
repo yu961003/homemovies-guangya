@@ -9,6 +9,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.example.localmovielibrarz.cloud115.Cloud115CookieProvider
 import com.example.localmovielibrarz.cloud115.Cloud115LoginApps
+import com.example.localmovielibrarz.playback.engine.MpvHwdecMode
 import com.example.localmovielibrarz.playback.lut.CubeLut
 import com.example.localmovielibrarz.playback.lut.LutParams
 import com.example.localmovielibrarz.playback.lut.LutSettings
@@ -935,10 +936,27 @@ class AppSettingsRepository(context: Context) {
      * mpv 的 hwdec 与 exo 的 MediaCodec 行为差异较大：部分老机型上 hwdec 会触发绿屏/花屏，
      * 因此暴露开关，并在设置项文案里说明"画面异常时关闭"。
      */
-    fun isMpvHardwareDecodingEnabled(): Boolean = prefs.getBoolean(KEY_MPV_HWDEC, true)
+    fun getMpvHwdecMode(): MpvHwdecMode {
+        val stored = prefs.getString(KEY_MPV_HWDEC_MODE, null)
+        if (stored != null) return MpvHwdecMode.fromId(stored)
+        // 迁移：早期版本只有一个布尔 `mpv_hwdec`（而且从来没有 UI 入口）。
+        // 首次升级时把旧值翻译成新档位，避免用户「明明关了硬解，升级后又被打开」。
+        return if (prefs.getBoolean(KEY_MPV_HWDEC, true)) MpvHwdecMode.HW else MpvHwdecMode.SW
+    }
+
+    fun saveMpvHwdecMode(mode: MpvHwdecMode) {
+        prefs.edit()
+            .putString(KEY_MPV_HWDEC_MODE, mode.id)
+            // 旧键继续跟着写：万一用户回滚到旧版本，行为与这次选择保持一致。
+            .putBoolean(KEY_MPV_HWDEC, mode != MpvHwdecMode.SW)
+            .apply()
+    }
+
+    /** 旧布尔接口保留：只关心「有没有开硬解」的调用点（日志字段等）继续可用。 */
+    fun isMpvHardwareDecodingEnabled(): Boolean = getMpvHwdecMode() != MpvHwdecMode.SW
 
     fun saveMpvHardwareDecodingEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_MPV_HWDEC, enabled).apply()
+        saveMpvHwdecMode(if (enabled) MpvHwdecMode.HW else MpvHwdecMode.SW)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1396,6 +1414,9 @@ class AppSettingsRepository(context: Context) {
         const val KEY_PLAYER_SEEK_FORWARD_SECONDS = "player_seek_forward_seconds"
         const val KEY_PLAYER_ENGINE = "player_engine"
         const val KEY_MPV_HWDEC = "mpv_hwdec"
+
+        /** mpv 解码档位（hw_plus / hw / sw）；见 [MpvHwdecMode]。 */
+        const val KEY_MPV_HWDEC_MODE = "mpv_hwdec_mode"
 
         /** 实时调色开关 / 尺寸 / 强度。7 个色彩参数的键在 [LutParamKey.prefKey] 里。 */
         const val KEY_LUT_ENABLED = "lut_enabled"

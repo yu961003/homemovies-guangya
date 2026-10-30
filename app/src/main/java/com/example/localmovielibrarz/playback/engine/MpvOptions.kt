@@ -153,21 +153,31 @@ object MpvOptions {
     }
 
     /**
-     * 决定 hwdec 取值。
+     * 把「界面上选的档位」翻译成 mpv 的 `hwdec` 取值。
      *
-     * 硬解依赖 FFmpeg 的 JNI 桥接（`av_jni_set_java_vm`），桥接失败时 mediacodec
-     * 会初始化失败并导致黑屏。因此这里分三档：
-     * 1. 桥接可用 → `mediacodec`（硬解，copy 回读，兼容性最好）
-     * 2. 桥接不可用 → `no`（纯软解，画面正常但 CPU 高）
-     * 3. 用户显式要求软解 → `no`
+     * 硬解依赖 FFmpeg 的 JNI 桥接（`av_jni_set_java_vm`）。桥接没建立时
+     * `mediacodec*` 会在解码器初始化阶段失败——表现为**画面黑、声音正常**，
+     * 而错误码只出现在 mpv 日志里。所以这里必须降级到 `no`：
+     * 把「用户选了硬解但机器不支持」变成「能看画面」，而不是黑屏。
+     *
+     * 具体映射见 [MpvHwdecMode.mpvValue]（`mediacodec` / `mediacodec-copy` / `no`）。
      */
-    fun decideHwdec(preferHardware: Boolean): String {
-        if (!preferHardware) return "no"
-        val bridgeReady = MPVLib.isHwdecBridgeReady()
-        if (!bridgeReady) {
-            Log.w(TAG, "FFmpeg JNI 桥接不可用，mpv 使用软解（hwdec=no）")
-            return "no"
+    fun resolveHwdecValue(mode: MpvHwdecMode): String {
+        if (mode == MpvHwdecMode.SW) return mode.mpvValue
+        if (!MPVLib.isHwdecBridgeReady()) {
+            // 桥接不可用时 mediacodec* 会在解码器初始化阶段失败，表现是「画面黑、声音正常」，
+            // 而且错误码只在 mpv 日志里。这里必须降到软解：让用户看到画面，而不是看黑屏。
+            Log.w(TAG, "FFmpeg JNI 桥接不可用，${mode.label} 降级为软解（hwdec=no）")
+            return MpvHwdecMode.SW.mpvValue
         }
-        return "mediacodec"
+        return mode.mpvValue
     }
+
+    /**
+     * 按档位决定 `hwdec` 取值（[resolveHwdecValue] 的语义化别名）。
+     *
+     * 保留这个名字是因为「装配 mpv 选项」的调用点读起来更像 decide 而不是 resolve；
+     * 真正的映射只有一份，就在 [resolveHwdecValue] 里。
+     */
+    fun decideHwdec(mode: MpvHwdecMode): String = resolveHwdecValue(mode)
 }

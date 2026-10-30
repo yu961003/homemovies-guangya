@@ -125,6 +125,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import com.example.localmovielibrarz.mpv.MpvVideoView
+import com.example.localmovielibrarz.playback.engine.MpvHwdecMode
 import com.example.localmovielibrarz.playback.engine.PlaybackEngineKind
 import com.example.localmovielibrarz.playback.vr.VrControlMode
 import com.example.localmovielibrarz.playback.vr.VrMode
@@ -463,11 +464,15 @@ fun PlayerScreen(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
-                        if (uiState.mpvReady) attach()
+                        // 无条件挂载：mpv 的视频输出在**装载那一刻**就初始化，
+                        // 等 mpvReady（= 已装载）再挂就已经晚了，画面永远是黑的。
+                        attach()
                     }
                 },
                 update = { view ->
-                    if (uiState.mpvReady) view.attach() else view.detach()
+                    // 同样不按 mpvReady 门控：重复 attach 是幂等的
+                    //（MpvVideoView 内部用 surfaceAttached 去重）。
+                    view.attach()
                 },
                 onRelease = { it.detach() }
             )
@@ -551,6 +556,18 @@ fun PlayerScreen(
                 showExternalSubtitleControl = uiState.subtitleFeaturesEnabled,
                 showAudioTrackControl = uiState.audioTracks.count { it.supported } > 1,
                 onBack = leavePlayer,
+                engineKind = uiState.engineKind,
+                engineSwitching = uiState.engineSwitching,
+                onSwitchEngine = {
+                    viewModel.switchEngine(
+                        if (uiState.engineKind == PlaybackEngineKind.MPV) {
+                            PlaybackEngineKind.EXO
+                        } else {
+                            PlaybackEngineKind.MPV
+                        }
+                    )
+                    controlsVisible = true
+                },
                 onAudioTrack = {
                     audioTrackDialogVisible = true
                     controlsVisible = true
@@ -602,26 +619,9 @@ fun PlayerScreen(
             )
         }
 
-        // 双内核切换入口：独立浮层，不侵入 PlayerOverlay 的控件布局，
-        // 也保证 exo 与 mpv 两种内核下按钮出现在同一位置、同一尺寸。
-        EngineSwitchChip(
-            current = uiState.engineKind,
-            switching = uiState.engineSwitching,
-            visible = controlsVisible && !controlsLocked,
-            onSwitch = {
-                viewModel.switchEngine(
-                    if (uiState.engineKind == PlaybackEngineKind.MPV) {
-                        PlaybackEngineKind.EXO
-                    } else {
-                        PlaybackEngineKind.MPV
-                    }
-                )
-                controlsVisible = true
-            },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(18.dp)
-        )
+        // 双内核切换入口已并入 `TopGradientBar`（见 EngineSwitchPill）。
+        // 之前这里是飘在 TopEnd 的独立 chip，和顶栏右侧的音轨/字幕/播放模式
+        // 抢同一块区域，实测会挡住字幕按钮；现在只在顶栏里占约 96dp。
 
         // 切换结果提示（拒绝原因 / 失败原因 / VR 保护提示）统一走这里。
         EngineNoticeBanner(
@@ -662,6 +662,9 @@ fun PlayerScreen(
             selectedControlMode = vrControlMode,
             lutAutoTuneBusy = uiState.lutAutoTuneBusy,
             lutAutoTuneMessage = uiState.lutAutoTuneMessage,
+            engineKind = uiState.engineKind,
+            hwdecMode = uiState.mpvHwdecMode,
+            onHwdecMode = viewModel::setMpvHwdecMode,
             onDismiss = { playbackModePanelVisible = false },
             onVrMode = { mode ->
                 viewModel.setVrMode(mode)
@@ -1569,9 +1572,12 @@ private fun PlayerOverlay(
     aspectLabel: String,
     showExternalSubtitleControl: Boolean,
     showAudioTrackControl: Boolean,
+    engineKind: PlaybackEngineKind,
+    engineSwitching: Boolean,
     onBack: () -> Unit,
     onAudioTrack: () -> Unit,
     onExternalSubtitle: () -> Unit,
+    onSwitchEngine: () -> Unit,
     onPlaybackModePanel: () -> Unit,
     onTogglePlay: () -> Unit,
     onSeekBack: () -> Unit,
@@ -1607,9 +1613,12 @@ private fun PlayerOverlay(
             title = title,
             showExternalSubtitleControl = showExternalSubtitleControl,
             showAudioTrackControl = showAudioTrackControl,
+            engineKind = engineKind,
+            engineSwitching = engineSwitching,
             onBack = onBack,
             onAudioTrack = onAudioTrack,
             onExternalSubtitle = onExternalSubtitle,
+            onSwitchEngine = onSwitchEngine,
             onModeMenuClick = {
                 speedMenuExpanded = false
                 onPlaybackModePanel()
@@ -1700,9 +1709,12 @@ private fun TopGradientBar(
     title: String,
     showExternalSubtitleControl: Boolean,
     showAudioTrackControl: Boolean,
+    engineKind: PlaybackEngineKind,
+    engineSwitching: Boolean,
     onBack: () -> Unit,
     onAudioTrack: () -> Unit,
     onExternalSubtitle: () -> Unit,
+    onSwitchEngine: () -> Unit,
     onModeMenuClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1730,6 +1742,15 @@ private fun TopGradientBar(
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 14.dp, vertical = 12.dp)
+        )
+        // 内核切换 pill：只占约 96dp，紧贴右侧按钮组左侧，不会遮挡字幕按钮。
+        // 顶栏按钮是 48dp 圆钮（MinTouchTarget），中心在 24dp；pill 高 30dp，
+        // 加 9dp 上边距后中心同为 24dp，视觉上与右侧按钮同一水平线。
+        EngineSwitchPill(
+            current = engineKind,
+            switching = engineSwitching,
+            onSwitch = onSwitchEngine,
+            modifier = Modifier.padding(top = 9.dp, end = 10.dp)
         )
         if (showAudioTrackControl) {
             GlassIconButton(
@@ -1760,6 +1781,9 @@ private fun PlaybackModePanel(
     selectedControlMode: VrControlMode,
     lutAutoTuneBusy: Boolean,
     lutAutoTuneMessage: String?,
+    engineKind: PlaybackEngineKind,
+    hwdecMode: MpvHwdecMode,
+    onHwdecMode: (MpvHwdecMode) -> Unit,
     onDismiss: () -> Unit,
     onVrMode: (VrMode) -> Unit,
     onVrControlMode: (VrControlMode) -> Unit,
@@ -1799,6 +1823,9 @@ private fun PlaybackModePanel(
                 selectedControlMode = selectedControlMode,
                 lutAutoTuneBusy = lutAutoTuneBusy,
                 lutAutoTuneMessage = lutAutoTuneMessage,
+                engineKind = engineKind,
+                hwdecMode = hwdecMode,
+                onHwdecMode = onHwdecMode,
                 onDismiss = onDismiss,
                 onVrMode = onVrMode,
                 onVrControlMode = onVrControlMode,
@@ -1817,6 +1844,9 @@ private fun PlaybackModeSidePanel(
     onDismiss: () -> Unit,
     onVrMode: (VrMode) -> Unit,
     onVrControlMode: (VrControlMode) -> Unit,
+    engineKind: PlaybackEngineKind,
+    hwdecMode: MpvHwdecMode,
+    onHwdecMode: (MpvHwdecMode) -> Unit,
     onAutoTuneLut: () -> Unit
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxHeight()) {
@@ -1896,6 +1926,21 @@ private fun PlaybackModeSidePanel(
                     enabled = !lutAutoTuneBusy,
                     onClick = onAutoTuneLut
                 )
+                if (engineKind == PlaybackEngineKind.MPV) {
+                    // 三档硬解只在 mpv 内核下有意义：exo 的硬解由 media3 自己挑，
+                    // 没有「零拷贝 / 回拷 / 软解」这种可选档位可对。
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
+                    PlaybackModeSectionTitle("解码（MPV）")
+                    MpvHwdecMode.entries.forEach { mode ->
+                        PlaybackModeOptionRow(
+                            title = mode.label,
+                            subtitle = mode.subtitle,
+                            selected = mode == hwdecMode,
+                            enabled = true,
+                            onClick = { onHwdecMode(mode) }
+                        )
+                    }
+                }
             }
         }
     }
@@ -2359,56 +2404,78 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * 内核切换 chip。
+ * 内核切换 pill（顶栏内，两段式）。
  *
- * 做成独立浮层而不是塞进 PlayerOverlay：exo 与 mpv 两种内核共用同一份 PlayerOverlay，
- * 把切换按钮放进去会让「当前内核」这一状态在 exo 的 Player.Listener 与 mpv 的快照轮询之间
- * 产生两条写入路径；独立浮层只读 [current]，写只有一个入口 [onSwitch]。
+ * 替代先前那个飘在 TopEnd 的宽 chip（文案是「内核 MPV（万能解码）→ ExoPlayer（默认）」）：
+ * 它既太大，又和顶栏右侧的音轨 / 字幕 / 播放模式三个按钮抢同一块区域，
+ * 实测会挡住字幕按钮。现在每段只写内核缩写，当前档反白高亮，
+ * 点击另一段即切换，宽度约 96dp，位置固定在顶栏右组左缘。
+ *
+ * 只读 [current]，写只有 [onSwitch] 一个入口 —— 与旧实现保持同一条数据流，
+ * 避免「当前内核」在 exo 的 Player.Listener 与 mpv 的快照轮询之间被写两次。
  */
 @Composable
-private fun EngineSwitchChip(
+private fun EngineSwitchPill(
     current: PlaybackEngineKind,
     switching: Boolean,
-    visible: Boolean,
     onSwitch: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(),
-        exit = fadeOut(),
+    Row(
         modifier = modifier
+            .height(30.dp)
+            .clip(RoundedCornerShape(15.dp))
+            .background(Color.White.copy(alpha = 0.14f))
+            .padding(3.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        val target = if (current == PlaybackEngineKind.MPV) PlaybackEngineKind.EXO else PlaybackEngineKind.MPV
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(50))
-                .background(Color.Black.copy(alpha = 0.45f))
-                .clickable(enabled = !switching, onClick = onSwitch)
-                .padding(horizontal = 12.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            if (switching) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(13.dp),
-                    strokeWidth = 1.6.dp,
-                    color = Color.White
-                )
-            }
-            Text(
-                text = if (switching) "切换中…" else "内核 ${current.label}",
-                color = Color.White,
-                style = MaterialTheme.typography.labelMedium
+        EngineSwitchSegment(
+            label = "MPV",
+            active = current == PlaybackEngineKind.MPV,
+            enabled = !switching,
+            onClick = { if (current != PlaybackEngineKind.MPV) onSwitch() }
+        )
+        EngineSwitchSegment(
+            label = "EXO",
+            active = current == PlaybackEngineKind.EXO,
+            enabled = !switching,
+            onClick = { if (current != PlaybackEngineKind.EXO) onSwitch() }
+        )
+        if (switching) {
+            CircularProgressIndicator(
+                modifier = Modifier
+                    .padding(horizontal = 4.dp)
+                    .size(11.dp),
+                strokeWidth = 1.4.dp,
+                color = Color.White
             )
-            if (!switching) {
-                Text(
-                    text = "→ ${target.label}",
-                    color = Color.White.copy(alpha = 0.62f),
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
         }
+    }
+}
+
+/** [EngineSwitchPill] 的一段：当前档反白，另一档透明。 */
+@Composable
+private fun EngineSwitchSegment(
+    label: String,
+    active: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .height(24.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (active) Color.White.copy(alpha = 0.92f) else Color.Transparent)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 9.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = if (active) Color(0xFF1A1C20) else Color.White.copy(alpha = 0.78f),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 

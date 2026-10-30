@@ -196,12 +196,32 @@ object MPVLib {
             .onFailure { Log.e(TAG, "command(${args.joinToString(" ")}) 失败", it) }
     }
 
+    /**
+     * 当前是否已经把有效 Surface 交给 mpv（等价于原生侧 `wid` 非 0）。
+     *
+     * 为什么需要这个标志：mpv 的 android VO **只在第一次初始化视频输出时读一次 `wid`**。
+     * 读到的若是 0，`vo_android_init()` 直接 `MP_FATAL("Missing surface pointer")` 失败，
+     * 之后 mpv 退化成「只放声音」—— 音频、进度、时长全都正常，画面永远是黑的，
+     * 而且不会有任何 end-file 错误码。所以「装载媒体」必须排在这个标志为 true 之后
+     * （见 MpvPlaybackEngine.awaitSurfaceThen）。
+     *
+     * 写入点只有下面两个包装（都在主线程由 MpvVideoView 调用），
+     * `@Volatile` 只是给跨线程读留的安全余量。
+     */
+    @Volatile
+    var surfacePresent: Boolean = false
+        private set
+
     fun attachSurfaceSafe(surface: Surface): Int {
         if (!ensureLoaded()) return ERR_NOT_LOADED
-        return runCatching { attachSurface(surface) }.getOrDefault(ERR_NOT_LOADED)
+        val ret = runCatching { attachSurface(surface) }.getOrDefault(ERR_NOT_LOADED)
+        if (ret == 0) surfacePresent = true
+        return ret
     }
 
     fun detachSurfaceSafe(): Int {
+        // 先落标志再解绑：解绑之后 wid 归零，视频输出已经不可用，别让等待方误判。
+        surfacePresent = false
         if (!ensureLoaded()) return 0
         return runCatching { detachSurface() }.getOrDefault(ERR_NOT_LOADED)
     }

@@ -35,7 +35,8 @@ import kotlin.math.max
 class MpvPlaybackEngine(
     private val context: Context,
     private val cacheDir: File,
-    private val preferHardwareDecode: Boolean = true
+    /** 硬件解码档位（hw+ / hw / sw）。运行期可用 [setHwdecMode] 热切换。 */
+    private val hwdecMode: MpvHwdecMode = MpvHwdecMode.HW
 ) : PlaybackEngine {
 
     override val kind: PlaybackEngineKind = PlaybackEngineKind.MPV
@@ -54,6 +55,24 @@ class MpvPlaybackEngine(
     private var released = false
 
     private val fileLoaded = AtomicBoolean(false)
+
+    /**
+     * 当前生效的解码档位。
+     *
+     * 与构造参数分开的原因：[setHwdecMode] 是运行期热切换，构造参数只在建实例时读一次；
+     * 错误文案里要报「现在到底用的哪一档」，所以必须有一个会被改写的副本。
+     */
+    @Volatile
+    private var activeHwdecMode: MpvHwdecMode = hwdecMode
+
+    /**
+     * 是否已经给过「video-reload 重建视频输出」这一次自愈机会（每次装载复位）。
+     *
+     * mpv 的 android VO 一旦在 `vo_android_init()` 失败，`mpctx->video_out` 就是 NULL，
+     * 此时再改 `wid` 也不会自动重建（`command.c` 的 UPDATE_VO 分支要求 video_out 非空），
+     * 只有 `video-reload` 会重新走一遍 VO 初始化。所以只能给一次机会，不能无限重试。
+     */
+    private var videoReloadTried = false
 
     private var currentUri: String? = null
     private var currentHeaders: Map<String, String> = emptyMap()
@@ -161,7 +180,7 @@ class MpvPlaybackEngine(
         // （av_jni_set_java_vm），而桥是在 createEngine → mpv_create 这条链里注册的。
         // 原来在 createEngine 之前问，桥必然还没就绪，于是永远退回 hwdec=no 软解，
         // 表现为「能播但一放 4K 就烫」——和 -13 无关，但属于移植缺陷，一并修掉。
-        val hwdec = MpvOptions.decideHwdec(preferHardwareDecode)
+        val hwdec = MpvOptions.decideHwdec(activeHwdecMode)
 
         // 信任锚只对**直连兜底路径**有意义：mpv 0.41 的 stream_lavf 里 tls_verify 默认是
         // false（`OPT_FLAG("tls-verify", …, 1, false)`），所以正常情况它压根不校验证书。
@@ -313,6 +332,8 @@ class MpvPlaybackEngine(
         lastLoadScheme = source?.scheme
         // 上一次装载的 mpv 日志不能混进这一次的失败文案
         synchronized(recentMpvLogs) { recentMpvLogs.clear() }
+        // 同理，上一次装载的「已尝试 video-reload」状态也不能带过来
+        resetVideoOutputAudit()
 
         // **网络路径的全部差异都在这一行收口**：
         // https/http 直链一律改道本机回环代理，TLS 握手、跨协议重定向、UA、请求头
@@ -333,13 +354,54 @@ class MpvPlaybackEngine(
             applyHeaders(headers)
         }
 
-        MPVLib.cmd("set", "pause", if (autoPlay) "no" else "yes")
-        MPVLib.cmd("loadfile", mpvUrl, "replace")
+        // ── 黑屏根因修复：先挂渲染面，再 loadfile ────────────────────────────
+        // mpv 的 android VO 在**第一次初始化视频输出**时读一次 `wid`；读到 0 就
+        // `MP_FATAL("Missing surface pointer")` 直接失败，此后 mpv 只剩音频——
+        // 音频、进度、时长全都正常，画面永远是黑的，也没有 end-file 错误码。
+        // 旧实现把「挂 Surface」门控在 uiState.mpvReady 上，而 mpvReady 要等
+        // loadfile 之后才变 true，于是 loadfile 必然抢在 wid 之前：每次都黑屏。
+        // 现在反过来——等 [MPVLib.surfacePresent] 就绪再下发；超时（例如 View 被
+        // 别的界面挡着没起来）仍然下发，但不会静默，由 [auditVideoOutput] 报出来。
+        val finalUrl = mpvUrl
+        val finalSource = source
+        awaitSurfaceThen {
+            if (released || generation != loadGeneration.get()) return@awaitSurfaceThen
+            MPVLib.cmd("set", "pause", if (autoPlay) "no" else "yes")
+            MPVLib.cmd("loadfile", finalUrl, "replace")
 
-        // 新的已经下发，旧的才有资格关：content:// 的 fd 要撑到 mpv 自己 open 完。
-        if (source != null) retainSource(source)
+            // 新的已经下发，旧的才有资格关：content:// 的 fd 要撑到 mpv 自己 open 完。
+            if (finalSource != null) retainSource(finalSource)
 
-        updateSnapshot { it.copy(playWhenReady = autoPlay, errorMessage = null) }
+            updateSnapshot { it.copy(playWhenReady = autoPlay, errorMessage = null) }
+        }
+    }
+
+    /**
+     * 等到 mpv 已经拿到有效 Surface（原生 `wid` 非 0）后再执行 [action]。
+     *
+     * 为什么用轮询而不是回调：SurfaceView 的 `surfaceCreated` 与
+     * [MPVLib.attachSurfaceSafe] 都在主线程，这里的 `postDelayed` 与它们天然串行，
+     * 一个约一帧的轮询就足够，不必再引入一套监听器生命周期。
+     *
+     * 超时后照常执行 [action]：只出声总比什么都不播好，但必须让原因可见，
+     * 这一条由 [auditVideoOutput] 兜底。
+     */
+    private fun awaitSurfaceThen(attempt: Int = 0, action: () -> Unit) {
+        if (released) return
+        if (MPVLib.surfacePresent) {
+            action()
+            return
+        }
+        if (attempt >= SURFACE_WAIT_MAX_ATTEMPTS) {
+            Log.w(
+                TAG,
+                "等待渲染面超时（${attempt * SURFACE_WAIT_RETRY_MS}ms 仍未挂上 Surface）：" +
+                    "仍下发 loadfile，若画面全黑见后续「mpv 画面未建立」报错"
+            )
+            action()
+            return
+        }
+        mainHandler.postDelayed({ awaitSurfaceThen(attempt + 1, action) }, SURFACE_WAIT_RETRY_MS)
     }
 
     private fun retainSource(source: MpvMediaSource) {
@@ -756,6 +818,8 @@ class MpvPlaybackEngine(
                     subtitleOffsetMs = offset
                     applySubtitle(subtitle)
                 }
+                // 画面到底出没出来，要等 VO 初始化之后才知道，所以延后一拍再查。
+                scheduleVideoOutputAudit()
                 updateSnapshot { it.copy(playbackState = PlaybackSnapshot.STATE_READY) }
             }
 
@@ -794,6 +858,104 @@ class MpvPlaybackEngine(
                 updateSnapshot { it.copy(playbackState = PlaybackSnapshot.STATE_IDLE, isPlaying = false) }
             }
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 黑屏自检（把「静默黑屏」变成一句能查的话）
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private val videoOutputAudit = Runnable { auditVideoOutput() }
+
+    /** 每次 loadfile 前复位自检状态。 */
+    private fun resetVideoOutputAudit() {
+        videoReloadTried = false
+        mainHandler.removeCallbacks(videoOutputAudit)
+    }
+
+    /** 装载完成后延后一秒半检查视频输出（留够 VO 初始化 + 首帧渲染的时间）。 */
+    private fun scheduleVideoOutputAudit() {
+        mainHandler.removeCallbacks(videoOutputAudit)
+        mainHandler.postDelayed(videoOutputAudit, VIDEO_OUTPUT_AUDIT_DELAY_MS)
+    }
+
+    /**
+     * 检查「视频输出到底有没有建立」。
+     *
+     * 判据是 mpv 自己的 `vo-configured` 属性 **加上** 它自己打出的 fatal 日志：
+     * - `vo-configured == false` 且日志命中 [VIDEO_OUTPUT_FAILURE_SIGNATURES]
+     *   → 视频输出初始化失败，画面必然是黑的（音频不受影响）；
+     * - 两个条件必须同时成立才报错：暂停时 `vo-configured` 也可能还是 false，
+     *   只看属性会误报。
+     *
+     * 命中后先试一次 `video-reload`：此刻 Surface 通常已经挂上了，重建 VO 就能出画面。
+     * 复查仍失败才写 errorMessage —— 用户至少能看到「为什么黑」和该往哪查。
+     */
+    private fun auditVideoOutput() {
+        if (released || !fileLoaded.get()) return
+        // 已经有真正的根因（加载失败等）报过了，别用「黑屏」把它盖掉。
+        if (_snapshot.value.errorMessage != null) return
+        if (MPVLib.getBoolean("vo-configured") != false) return
+        val signature = videoOutputFailureSignature() ?: return
+
+        if (!videoReloadTried && MPVLib.surfacePresent) {
+            videoReloadTried = true
+            Log.w(TAG, "视频输出未建立（$signature）：Surface 已就绪，尝试 video-reload 重建")
+            MPVLib.cmd("video-reload")
+            mainHandler.removeCallbacks(videoOutputAudit)
+            mainHandler.postDelayed(videoOutputAudit, VIDEO_OUTPUT_RELOAD_RECHECK_MS)
+            return
+        }
+
+        val message = "mpv 画面未建立：视频输出初始化失败（$signature）。" +
+            describeLoadedUrl() + describeVideoOutputPath() + describeMpvLogTail()
+        Log.e(TAG, message)
+        updateSnapshot { it.copy(errorMessage = message) }
+    }
+
+    /**
+     * 从 mpv 最近日志里找「视频输出失败」的证据行。
+     *
+     * 这几条字符串来自 mpv 的 `video/out/android_common.c` 与
+     * `video/out/opengl/context_android.c`，是本仓 libmpv.so 里逐字存在的 `MP_FATAL` 文案
+     * （字符串表核过），命中即等价于「VO 初始化失败」——不是猜测，也不是超时推断。
+     */
+    private fun videoOutputFailureSignature(): String? {
+        val tail = synchronized(recentMpvLogs) { recentMpvLogs.toList() }
+        if (tail.isEmpty()) return null
+        for (line in tail.asReversed()) {
+            for (signature in VIDEO_OUTPUT_FAILURE_SIGNATURES) {
+                if (line.contains(signature)) return signature
+            }
+        }
+        return null
+    }
+
+    /** 黑屏时补一句「该往哪看」，免得把问题误判成解码或网络。 */
+    private fun describeVideoOutputPath(): String {
+        val surface = if (MPVLib.surfacePresent) "已挂载" else "未挂载（Surface 没到或已被销毁）"
+        val vo = MPVLib.getString("current-vo") ?: "unknown"
+        return "；渲染面=$surface，vo=$vo，hwdec=${activeHwdecMode.mpvValue}"
+    }
+
+    /**
+     * 运行期切换硬件解码档位。
+     *
+     * `hwdec` 在 mpv 里是可选值属性：改完之后 mpv 丢弃当前解码器、用新档位重建视频链，
+     * 不需要重新 loadfile，也不会重建 mpv 实例——所以切档不打断播放位置。
+     *
+     * @return mpv 错误码，0 = 已生效；负数表示属性不可写或被裁剪掉（会写进日志）。
+     */
+    fun setHwdecMode(mode: MpvHwdecMode): Int {
+        if (released) return MPVLib.ERR_NOT_LOADED
+        val value = MpvOptions.resolveHwdecValue(mode)
+        val ret = MPVLib.setString("hwdec", value)
+        if (ret < 0) {
+            Log.w(TAG, "运行期设置 hwdec=$value 失败: $ret")
+        } else {
+            activeHwdecMode = mode
+            Log.i(TAG, "运行期切换解码档位：${mode.label} → hwdec=$value")
+        }
+        return ret
     }
 
     /**
@@ -1112,6 +1274,30 @@ class MpvPlaybackEngine(
 
     companion object {
         private const val TAG = "MpvPlaybackEngine"
+
+        /** 等渲染面的重试间隔：约一帧。SurfaceView 通常 1~3 帧内就绪。 */
+        private const val SURFACE_WAIT_RETRY_MS = 16L
+
+        /** 最多等 2.4 秒（150 帧）：再等下去就是 View 根本没起来，报错比死等有用。 */
+        private const val SURFACE_WAIT_MAX_ATTEMPTS = 150
+
+        /** 装载后多久检查视频输出：留够 VO 初始化 + 首帧渲染的时间。 */
+        private const val VIDEO_OUTPUT_AUDIT_DELAY_MS = 1500L
+
+        /** video-reload 之后多久复查：重建 VO 比首次初始化慢一点。 */
+        private const val VIDEO_OUTPUT_RELOAD_RECHECK_MS = 1200L
+
+        /**
+         * mpv 视频输出失败的 fatal 文案（见 `video/out/android_common.c` 与
+         * `video/out/opengl/context_android.c`）。命中任一即表示 VO 没起来。
+         */
+        private val VIDEO_OUTPUT_FAILURE_SIGNATURES = listOf(
+            "Missing surface pointer",
+            "Failed to create ANativeWindow",
+            "Could not attach java VM",
+            "Video output initialization failed",
+            "Could not create video output"
+        )
 
         /**
          * 当前「持有原生 mpv 实例」的引擎（静态，因为原生 `g_mpv` 是进程级单例）。

@@ -54,6 +54,44 @@ data class PlaybackSnapshot(
 }
 
 /**
+ * mpv 硬件解码档位。
+ *
+ * 为什么是三档而不是一个布尔开关：`hwdec` 在 mpv 里本来就是多值项。
+ * - `mediacodec`      ：Surface 零拷贝直出，最省电、延迟最低；个别机型的解码器对
+ *                       10bit / HDR 支持不全，会花屏或绿屏。
+ * - `mediacodec-copy` ：解出来的帧拷回内存再上屏，多一次拷贝，兼容性明显更好。
+ * - `no`              ：纯 CPU 软解，任何片源都能出画面，代价是功耗。
+ * 旧版本只暴露了「开 / 关」两态（而且那个开关根本没有 UI 入口），
+ * 用户遇到花屏时没有中间档可选——这就是本次补三档的动机。
+ *
+ * [mpvValue] 直接写 mpv 的对外取值而不是在别处做 when 分支：这些字符串是
+ * libmpv 的契约，集中一处便于和二进制里实际支持的取值逐条对照
+ * （本仓 libmpv.so 的字符串表里 `mediacodec` / `mediacodec-copy` / `no` 均存在）。
+ *
+ * 本文件不允许出现 import android.* / androidx.*（纯 JVM 单测要能加载它），
+ * 因此这里只放枚举，不放任何读设置的逻辑。
+ */
+enum class MpvHwdecMode(
+    val id: String,
+    val label: String,
+    val subtitle: String,
+    val mpvValue: String
+) {
+    /** 零拷贝硬解。 */
+    HW_PLUS("hw_plus", "硬件解码 +", "零拷贝直出（最省电，个别机型可能花屏）", "mediacodec"),
+
+    /** 硬解回拷：兼容性更好的硬解档。 */
+    HW("hw", "硬件解码", "回拷上屏，兼容性更好（推荐）", "mediacodec-copy"),
+
+    /** 纯软解。 */
+    SW("sw", "软件解码", "CPU 解码，兼容一切片源，高码率更费电", "no");
+
+    companion object {
+        fun fromId(id: String?): MpvHwdecMode = entries.firstOrNull { it.id == id } ?: HW
+    }
+}
+
+/**
  * 引擎可用性探测结果。
  *
  * `available=false` 时 [reason] 会直接出现在 UI 上。这是**显式降级**而不是静默回退：

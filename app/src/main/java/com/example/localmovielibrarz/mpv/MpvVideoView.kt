@@ -105,7 +105,11 @@ class MpvVideoView @JvmOverloads constructor(
                 MPVLib.setSurfaceSizeSafe(lastWidth, lastHeight)
             }
         } else {
-            Log.w(TAG, "attachSurface 失败: $ret")
+            // 失败不能吞：mpv 实例还没创建时原生侧会返回 -900（g_mpv 为空），
+            // 这时把待挂状态留下，下一轮 attach()（每次重组都会调用）继续补挂。
+            // 丢掉这个标志会让「Surface 比 mpv 先到」的场景永久黑屏。
+            pendingAttach = true
+            Log.w(TAG, "attachSurface 失败: $ret（保持待挂状态，下次 attach 重试）")
         }
     }
 

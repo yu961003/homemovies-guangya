@@ -46,6 +46,7 @@ import com.example.localmovielibrarz.playback.ROUTE_GUANGYA_VOD
 import com.example.localmovielibrarz.playback.engine.EngineAvailability
 import com.example.localmovielibrarz.playback.engine.EngineSwitchPlanner
 import com.example.localmovielibrarz.playback.engine.ExternalSubtitle
+import com.example.localmovielibrarz.playback.engine.MpvHwdecMode
 import com.example.localmovielibrarz.playback.engine.MpvPlaybackEngine.MpvAudioTrack
 import com.example.localmovielibrarz.playback.engine.MpvPlaybackEngine
 import com.example.localmovielibrarz.playback.engine.PlaybackEngineFactory
@@ -230,6 +231,8 @@ class PlayerViewModel(
         get() = speeds
 
     init {
+        // 解码档位是持久化偏好，面板的选中态第一帧就要对，先同步进状态。
+        _uiState.update { it.copy(mpvHwdecMode = settingsRepository.getMpvHwdecMode()) }
         startLutObserver()
         viewModelScope.launch {
             val startedAtMs = SystemClock.elapsedRealtime()
@@ -1906,7 +1909,7 @@ class PlayerViewModel(
         val engine = MpvPlaybackEngine(
             context = application,
             cacheDir = File(application.cacheDir, MPV_SUBTITLE_CACHE_DIR),
-            preferHardwareDecode = settingsRepository.isMpvHardwareDecodingEnabled()
+            hwdecMode = settingsRepository.getMpvHwdecMode()
         )
         val initError = engine.initialize()
         if (initError != null) {
@@ -1944,10 +1947,31 @@ class PlayerViewModel(
             mapOf(
                 "startPositionMs" to startPositionMs.toString(),
                 "autoPlay" to autoPlay.toString(),
-                "hwdec" to settingsRepository.isMpvHardwareDecodingEnabled().toString()
+                "hwdec" to settingsRepository.getMpvHwdecMode().id
             )
         )
         return null
+    }
+
+    /**
+     * 切换 mpv 硬件解码档位（hw+ / hw / sw）。
+     *
+     * 三条路径必须一起走，否则会出现「面板里选中了、实际没生效」：
+     * 1. 持久化 —— 下次进播放器、下次新建 mpv 实例时用新档位；
+     * 2. 运行期热切换 —— 当前 mpv 实例直接改 `hwdec`（mpv 会重建解码器，不打断播放位置）；
+     * 3. 写 uiState —— 面板选中态立刻跟着动。
+     *
+     * exo 内核下只做 1 + 3：exo 侧没有对等的三档（硬解由 media3 自己决定），
+     * 攒下的选择会在切回 mpv 时生效。
+     */
+    fun setMpvHwdecMode(mode: MpvHwdecMode) {
+        if (_uiState.value.mpvHwdecMode == mode) return
+        settingsRepository.saveMpvHwdecMode(mode)
+        _uiState.update { it.copy(mpvHwdecMode = mode) }
+        logPlaybackEvent("player.mpv.hwdec_mode", mapOf("mode" to mode.id))
+        val engine = synchronized(mpvEngineLock) { mpvEngine } ?: return
+        if (_uiState.value.engineKind != PlaybackEngineKind.MPV) return
+        engine.setHwdecMode(mode)
     }
 
     /**
@@ -2510,6 +2534,8 @@ data class PlayerUiState(
     val mpvError: String? = null,
     /** mpv 是否已完成首次装载（未就绪时 UI 显示加载态而不是黑屏）。 */
     val mpvReady: Boolean = false,
+    /** mpv 硬件解码档位（hw+ / hw / sw）：面板选中态 + 下次建实例都用它。 */
+    val mpvHwdecMode: MpvHwdecMode = MpvHwdecMode.HW,
     // ── 自动分析调参（文档 §4.1）──────────────────────────────────────────
     /** 正在截帧分析：UI 用它禁掉按钮并显示进度。 */
     val lutAutoTuneBusy: Boolean = false,
