@@ -358,7 +358,14 @@ class CloudFolderBatchTaskRunner(
         }
 
         val message = summary.toUserMessage()
-        if (summary.scrapeFailedVideos > 0 || summary.failedVideos > 0 || summary.failedFolders > 0) {
+        // 判据只看「片子有没有被真正处理掉」：文件读取失败、提交失败才是任务失败。
+        //
+        // 刮削失败**不算**任务失败——走过一遍导入 + 刮削之后任务事实结束，
+        // 没拿到元数据的那几部留在影片库的「未刮削」里等用户重试。
+        // 旧实现把 scrapeFailedVideos > 0 也算失败，于是任务行永远停在 Failed；
+        // 而 prepareForStart 会把 Failed 重新置回 Pending，重跑时断点里的 ScrapeFailed
+        // 又被跳过、计数还是 >0，状态机再也回不到 Completed（进度永远转圈）。
+        if (summary.failedVideos > 0 || summary.failedFolders > 0) {
             taskRepository.markFailed(task.id, message)
             scrapeRepository.appendLog("网盘文件夹任务结束但存在失败：${task.folderName}，$message")
         } else {
@@ -803,7 +810,11 @@ private class CloudFolderBatchRunSummary(
         }
         return buildString {
             append("入库 $addedVideos 个")
-            if (scrapeFailedVideos > 0) append("，$scrapeFailedVideos 个未刮削成功")
+            if (scrapeFailedVideos > 0) {
+                // 任务本身已经结束，这里只说明「有几部还没元数据」并给出重试入口，
+                // 免得被读成「任务失败、要重新跑整个文件夹」。
+                append("，$scrapeFailedVideos 个未刮削成功（可在「影片 - 未刮削」里重试）")
+            }
             if (skippedVideos > 0) append("，跳过 $skippedVideos 个")
             if (failedVideos > 0 || failedFolders > 0) append("，失败 ${failedVideos + failedFolders} 项")
         }

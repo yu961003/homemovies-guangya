@@ -1069,11 +1069,31 @@ class MovieRepository(
             context.contentResolver.openInputStream(Uri.parse(uriString))?.use { true } == true
         }.getOrDefault(false)
 
+    /**
+     * 扫描/刷新时决定这部片子的刮削状态该怎么收敛。
+     *
+     * 「有 NFO 就算刮过」这条规则只对**从未失败过**的片子成立。旧实现对任何有 NFO 的行
+     * 都强制改写成 Completed 并清空失败原因，于是出现过这样的序列：
+     * 刮削失败 → 用户手动放了/沿用了同名 NFO（或某次部分成功写了 NFO）→ 全库同步
+     * → Failed 被抹成 Completed、失败原因丢失 → 影片从「未刮削」分类里消失，
+     * 用户既看不到它也重试不了。
+     *
+     * 失败是用户需要看见、需要重试的信息，不能被一次扫描静默洗掉；只有真正重新刮削成功
+     * （`markScrapeTaskCompleted`）才该翻成 Completed。
+     */
     private fun MovieEntity.resolvedScrapeFailureReason(old: MovieEntity): String? =
-        if (nfoUri != null) null else old.scrapeFailureReason
+        if (nfoUri != null && old.scrapeTaskStatus != ScrapeTaskStatus.Failed.name) {
+            null
+        } else {
+            old.scrapeFailureReason
+        }
 
     private fun MovieEntity.resolvedScrapeTaskStatus(old: MovieEntity): String =
-        if (nfoUri != null) ScrapeTaskStatus.Completed.name else old.scrapeTaskStatus
+        if (nfoUri != null && old.scrapeTaskStatus != ScrapeTaskStatus.Failed.name) {
+            ScrapeTaskStatus.Completed.name
+        } else {
+            old.scrapeTaskStatus
+        }
 
     private fun readPickcode(file: DocumentFile): String? {
         val content = runCatching {

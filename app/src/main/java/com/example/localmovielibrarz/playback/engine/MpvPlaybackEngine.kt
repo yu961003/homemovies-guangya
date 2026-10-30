@@ -935,9 +935,11 @@ class MpvPlaybackEngine(
     private val frameStatsPoll = object : Runnable {
         override fun run() {
             if (released || !created) return
-            val rendered = MPVLib.getInt("frame-drop-count")
-            val decoded = MPVLib.getInt("decoder-frame-drop-count")
-            val mistimed = MPVLib.getInt("mistimed-frame-count")
+            // getInt 在「属性还没就绪 / 引擎已释放」时返回 null，这里统一折算成 -1，
+            // 下面的 < 0 判断就把「读不到」和「计数为 0」区分开了。
+            val rendered = MPVLib.getInt("frame-drop-count") ?: -1
+            val decoded = MPVLib.getInt("decoder-frame-drop-count") ?: -1
+            val mistimed = MPVLib.getInt("mistimed-frame-count") ?: -1
             if (rendered >= 0 && decoded >= 0 && mistimed >= 0) {
                 val changed = rendered != lastFrameDropCount ||
                     decoded != lastDecoderDropCount ||

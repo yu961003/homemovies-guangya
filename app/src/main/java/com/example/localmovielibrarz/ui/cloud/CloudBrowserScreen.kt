@@ -267,16 +267,9 @@ fun CloudBrowserScreen(
                 onSearch = { showSearch = true }
             )
 
-            // 整夹添加的进度面板：主动作在这个页面发起，进度与暂停/继续也必须留在这里，
-            // 否则用户只能被告知「去设置页看」，等于没有进度。
-            if (uiState.folderBatchTasks.isNotEmpty()) {
-                CloudFolderBatchPanel(
-                    tasks = uiState.folderBatchTasks,
-                    onPause = viewModel::pauseFolderBatchTask,
-                    onResume = viewModel::resumeFolderBatchTask,
-                    onCancel = viewModel::cancelFolderBatchTask
-                )
-            }
+            // 整夹添加的进度面板已迁走：这个页面只负责浏览与发起。
+            // 一块常驻任务卡会把文件列表往下挤，也容易被读成「还有事没做完」；
+            // 进度、暂停、继续、取消统一放在 设置 - 文件夹发现任务。
 
             // H+1 轮：搜索防抖 300ms（原实现每输入一个字符即请求一次网盘 API）
             LaunchedEffect(queryText) {
@@ -780,121 +773,6 @@ private fun Cloud115FileItem.cloudSubtitle(sortOption: CloudSortOption): String 
 private fun Cloud115FileItem.isVideoFile(): Boolean =
     !isDirectory && VideoFormats.isVideoFileName(name)
 
-/**
- * 整夹添加的进度与操作面板。
- *
- * 数据直接来自 `cloud_folder_batch_tasks`（与设置页、runner 同一张表），所以这里看到的进度
- * 就是真实落库的进度，不存在「UI 自己算一套、实际跑另一套」的分叉。
- *
- * 整体百分比只统计 `queuedVideos > 0` 的行：还在递归收集候选的那条任务分母未知，
- * 把它算进来会把总进度算错（尤其是刚点完的那几秒）。
- */
-@Composable
-private fun CloudFolderBatchPanel(
-    tasks: List<CloudFolderBatchTaskEntity>,
-    onPause: (Long) -> Unit,
-    onResume: (Long) -> Unit,
-    onCancel: (Long) -> Unit
-) {
-    val countable = tasks.filter { it.status != CloudFolderBatchTaskStatus.Cancelled.name }
-    val aggregate = countable.folderBatchAggregateProgress()
-    // 行数不设上限会把这个面板撑成整屏，遮住文件列表；保留最近的几条 + 一条汇总即可。
-    val visibleTasks = tasks.take(FOLDER_BATCH_PANEL_MAX_ROWS)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .clip(AppRadius.MD)
-            .background(CloudPanel)
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Text(
-            text = when (aggregate) {
-                is FolderBatchProgress.Determinate ->
-                    "整夹添加进度 ${aggregate.completed}/${aggregate.total}（${(aggregate.ratio * 100).toInt()}%）"
-                is FolderBatchProgress.Indeterminate -> "整夹添加：${aggregate.label}"
-            },
-            color = MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold
-        )
-        when (aggregate) {
-            is FolderBatchProgress.Determinate -> LinearProgressIndicator(
-                progress = { aggregate.ratio },
-                modifier = Modifier.fillMaxWidth()
-            )
-            is FolderBatchProgress.Indeterminate -> LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-        visibleTasks.forEach { task ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = buildString {
-                        append(task.folderName)
-                        append(" · ")
-                        append(folderBatchStatusLabel(task))
-                        when (val rowProgress = task.folderBatchProgress()) {
-                            is FolderBatchProgress.Determinate -> {
-                                append(" ")
-                                append(rowProgress.completed)
-                                append("/")
-                                append(rowProgress.total)
-                            }
-                            is FolderBatchProgress.Indeterminate -> {
-                                append(" · ")
-                                append(rowProgress.label)
-                            }
-                        }
-                    },
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                if (task.status == CloudFolderBatchTaskStatus.Running.name ||
-                    task.status == CloudFolderBatchTaskStatus.Pending.name
-                ) {
-                    TextButton(
-                        onClick = { onPause(task.id) },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                    ) {
-                        Text("暂停", style = MaterialTheme.typography.bodySmall)
-                    }
-                } else {
-                    TextButton(
-                        onClick = { onResume(task.id) },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                    ) {
-                        Text("继续", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-                TextButton(
-                    onClick = { onCancel(task.id) },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                ) {
-                    Text("取消", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        }
-        if (tasks.size > visibleTasks.size) {
-            Text(
-                text = "另有 ${tasks.size - visibleTasks.size} 个文件夹任务，可在设置-刮削任务中查看",
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-    }
-}
-
-/** 面板里最多平铺几行任务；超出的折叠成一行提示。 */
-private const val FOLDER_BATCH_PANEL_MAX_ROWS = 5
 
 private fun folderBatchStatusLabel(task: CloudFolderBatchTaskEntity): String = when (task.status) {
     CloudFolderBatchTaskStatus.Pending.name -> "排队中"
