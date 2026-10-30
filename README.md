@@ -27,6 +27,8 @@
 > 叠加国内 DNS 对该域投毒返回 `2001::/32` 黑洞地址。已于同一批提交修掉 7 处（含 S1 专用抽取档 `WorkPageTable`）。
 > 完整证据链与四类根因占比见 `docs/SCRAPE-FAILURE-ANALYSIS-20261030.md`。
 
+> 🐞 **第四轮四处修复**（2026-10-30）：①刮削「全源失败」的真根因不在网络，而在读取层——`ScraperResponseGuard.readLimited()` 用 Okio 的 `readByteArray(maxBytes+1)`，该方法要求**恰好读满**，读不满抛 `EOFException`，于是每个走它的站（12 处调用点）**必然**报裸 `EOFException`；已改成按块读到 EOF。同时给两条刮削链做了去重（桃链问过的站，legacy 不再重打），并把官网首页抓取失败按 `Network/Timeout` 而不是 `ParseError` 归类。②exo 掉帧率把 `skippedOutputBuffers` 纳入统计（旧公式漏掉最影响体感的一类）；③mpv 帧统计不再因「三值不变」静默，并带 `vo-configured`/fps 诊断；④LUT 改为在 `mpv_initialize()` 之前以启动选项下发（运行期再设不会重建渲染管线），自动调参加 `screenshot-sw=yes` 并把截帧失败原因写进提示。详见 `docs/ROUND4-FIXES-20261030.md`。
+
 > 📦 **包名变更**：`com.example.localmovielibrary` → **`com.example.localmovielibrarz`**（全部 Kotlin package/import、namespace、applicationId、目录结构均已同步，含 test 目录）。
 
 ## 1. 改动清单
