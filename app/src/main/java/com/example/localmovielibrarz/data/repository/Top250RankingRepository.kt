@@ -1,419 +1,321 @@
 package com.example.localmovielibrarz.data.repository
 
 import android.content.Context
-import android.os.SystemClock
-import com.example.localmovielibrarz.data.local.MovieEntity
-import com.example.localmovielibrarz.util.normalizeMovieNumber
+import android.util.AtomicFile
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import java.util.Locale
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONArray
 import org.json.JSONObject
-import org.json.JSONTokener
+import java.util.concurrent.TimeUnit
 
 /**
- * JavDB TOP 榜单里的一条记录。
+ * 单条榜单名次。
  *
- * [number] 存归一化后的番号（`ABP-123` 形态），与影片库共用
- * [normalizeMovieNumber]，所以榜单与本地实体能稳定对上。
+ * [year] 为 `null` 表示命中总榜（`all.json`），非空表示命中该年度榜。
+ * 详情页按「总榜在前、其后 2026 降序到 2008」渲染多枚徽章。
  */
 data class Top250Rank(
-    val rank: Int,
-    val number: String,
-    val title: String? = null
+    val ranking: Int,
+    val label: String,
+    val year: Int?
 )
 
 /**
- * 榜单命中结果：卡片角标与详情页角标共用的显示模型。
- *
- * 为什么不直接把 [Top250Rank] 传进 Composable：卡片只需要排名数字，
- * 而排名数字决定角标配色（TOP3 用金色强调、其余用弱化色），
- * 拆出 [label] 后 UI 侧不必再判断排名区间。
+ * 卡片角标用的最简名次。**没有 label** —— 卡片文案由 UI 现场拼接，
+ * 因为总榜与年度的句式不同（"总榜 TOP250 第N名" / "2026 年度 TOP250 第N名"）。
  */
 data class Top250CardRank(
-    val rank: Int,
-    val label: String
+    val ranking: Int,
+    val year: Int?
 )
 
 /**
- * 卡片角标尺寸（对应 5.0.5 的 `BADGE_ICON_LARGE / SMALL / NONE` 三档）。
- *
- * 放在 data 层而不是 ui 层：它是**持久化的用户设置**，读写方是
- * [AppSettingsRepository]，UI 只是消费方。放进 ui 层会让 data 反向依赖 ui。
- * [stored] 是落盘的字符串值，改名前后的旧值靠 [fromStored] 归一，
- * 未知值一律回落到 [Small]（宁可显示小角标，也不要因为脏数据整块消失）。
- */
-enum class Top250BadgeSize(val stored: String) {
-    Large("large"),
-    Small("small"),
-    None("none");
-
-    val isVisible: Boolean get() = this != None
-
-    companion object {
-        fun fromStored(value: String?): Top250BadgeSize {
-            val normalized = value?.trim()?.lowercase().orEmpty()
-            return entries.firstOrNull { it.stored == normalized } ?: Small
-        }
-    }
-}
-
-/**
- * 榜单缓存的完整度。
- *
- * 5.0.5 的 TOP 榜单在影片库里按需匹配，命中率取决于本地影片与榜单的交集，
- * 因此设置页需要能显示「榜单 250 条 / 本地命中 N 条」，让用户知道
- * 为什么某些影片没有角标。`allCached` 表示当前榜单条目在本地都能找到。
+ * 缓存状态。`revision` 是唯一的全局失效信号：每次落盘或重算都会 +1，
+ * 卡片角标的 produceState 把它当 key，因此任一份榜单变化都会让可见角标重查。
  */
 data class Top250CacheStatus(
-    val cachedCount: Int,
-    val totalCount: Int,
-    val fetchedAtMillis: Long
-) {
-    val allCached: Boolean get() = totalCount > 0 && cachedCount >= totalCount
-}
-
-/** 一次榜单刷新的结果，供设置页 toast / 说明文案使用。 */
-data class Top250RefreshResult(
-    val total: Int,
-    val matched: Int,
-    val fetchedAtMillis: Long,
-    val fromNetwork: Boolean,
-    val error: String? = null
-) {
-    val success: Boolean get() = error == null
-}
-
-/** 榜单加载状态。Idle 表示本地还没触发过抓取。 */
-sealed interface Top250State {
-    data object Idle : Top250State
-    data object Loading : Top250State
-    data class Ready(
-        val ranks: Map<String, Top250Rank>,
-        val fetchedAtMillis: Long,
-        val fromCache: Boolean
-    ) : Top250State
-
-    data class Error(val message: String) : Top250State
-}
+    val allCached: Boolean = false,
+    val cachedYears: List<Int> = emptyList(),
+    val initialAttempted: Boolean = false,
+    val isLoading: Boolean = false,
+    val completed: Int = 0,
+    val total: Int = 0,
+    val revision: Int = 0
+)
 
 /**
- * JavDB TOP 榜单仓储。
+ * 一轮刷新的结果。[failed] 非空时设置页显示失败份数；
+ * [initial] 区分「首次全量 20 份」与「日常只更新 2 份」。
+ */
+data class Top250RefreshResult(
+    val updated: List<String>,
+    val failed: List<String>,
+    val initial: Boolean
+)
+
+/**
+ * JavDB TOP 榜单仓储（移植自 5.0.5 `Top250RankingRepository`）。
  *
- * 数据来源是 5.0.5 使用的榜单端点（默认 `https://catembylegacy.fastcdn.dpdns.org/`），
- * 但**不照抄它的 JSON 结构假设**：榜单接口的字段命名在历史版本里换过多次，
- * 且当前没有可离线的样例可以作为 schema 依据，因此解析层做成宽松别名匹配，
- * 结构变化时只需要动 [Top250PayloadParser]，UI 与匹配逻辑完全不受影响。
+ * ## 与抓削链路无关
+ * TOP250 的数据来自自建 CDN 上**预生成**的静态 JSON，不来自 [com.example.localmovielibrarz.scraper.JavdbScraper]。
+ * 两条链路唯一的共同点是都被叫做 "javdb"，内部没有共享代码。
  *
- * 与 [AppSettingsRepository] 的关系：端点与开关都落在设置里（4.0.0 的 javdb_api_url
- * 也是可配置的，保持一致），仓储只读不写，避免出现两份真值。
+ * ## 端点与文件
+ * 路径 = [BASE_URL] + name + ".json"，name 共 20 个：`all` 与 `year-2008` … `year-2026`。
+ * 没有 query、没有自定义 header。
+ *
+ * ## 为什么不预热
+ * 全应用只有设置页按钮会触发网络请求，启动不拉。榜单一天一更，
+ * 冷启动联网既拖慢首屏又白耗流量。
  */
 class Top250RankingRepository(
-    context: Context,
-    private val settingsRepository: AppSettingsRepository,
-    private val client: OkHttpClient = OkHttpClient(),
+    private val context: Context,
+    private val client: OkHttpClient = defaultClient(),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
-    private val appContext = context.applicationContext
-    private val cacheFile = File(appContext.filesDir, CACHE_FILE_NAME)
+    private val operationMutex = Mutex()
 
-    private val _state = MutableStateFlow<Top250State>(Top250State.Idle)
-    val state: StateFlow<Top250State> = _state.asStateFlow()
+    private val _status = MutableStateFlow(Top250CacheStatus())
 
-    /** 仅在内存里缓存一次归一化结果，避免每次滚动都重读磁盘。 */
-    @Volatile
-    private var ranksByNumber: Map<String, Top250Rank> = emptyMap()
+    /** 缓存状态；设置页、卡片角标、榜单页都订阅它。 */
+    val status: StateFlow<Top250CacheStatus> = _status.asStateFlow()
 
-    @Volatile
-    private var cachedStatus: Top250CacheStatus = Top250CacheStatus(0, 0, 0L)
-
-    fun cacheStatus(): Top250CacheStatus = cachedStatus
-
-    /**
-     * 取某条影片的榜单排名。
-     *
-     * 番号来源按可信度排序：`uniqueIds`（刮削写入的 external id，最准）→
-     * `videoName`（文件名，通常带番号）→ `title`（可能已被元数据改写）。
-     * 全部走 [normalizeMovieNumber]，与字幕库、STRM 用的是同一套规则。
-     */
-    fun rankOf(movie: MovieEntity): Top250Rank? {
-        if (ranksByNumber.isEmpty()) return null
-        movie.uniqueIds.forEach { id ->
-            val hit = lookup(id)
-            if (hit != null) return hit
-        }
-        normalizeMovieNumber(movie.videoName)?.let { number ->
-            ranksByNumber[number]?.let { return it }
-        }
-        normalizeMovieNumber(movie.title)?.let { number ->
-            ranksByNumber[number]?.let { return it }
-        }
-        return null
-    }
-
-    private fun lookup(raw: String): Top250Rank? {
-        val direct = ranksByNumber[raw.trim().uppercase(Locale.ROOT)]
-        if (direct != null) return direct
-        val normalized = normalizeMovieNumber(raw) ?: return null
-        return ranksByNumber[normalized]
+    /** 只按磁盘现有文件重算状态，不联网。进入设置页时调用。 */
+    suspend fun readStatus(): Top250CacheStatus = withContext(ioDispatcher) {
+        publishStatus(isLoading = _status.value.isLoading, completed = _status.value.completed, total = _status.value.total)
     }
 
     /**
-     * 冷启动加载：先吃磁盘缓存（离线可用），再决定是否联网刷新。
-     *
-     * 这里刻意不阻塞首帧：缓存命中直接进 Ready(fromCache=true)，
-     * 刷新交给 [refresh] 由设置页或下拉手动触发。
+     * 刷新榜单。首次（无 marker）拉全量 20 份，之后只拉 `all` 与 `year-2026`。
+     * 单份失败不会中断整轮，只记入 [Top250RefreshResult.failed]。
      */
-    suspend fun loadFromCache(): Top250State = withContext(ioDispatcher) {
-        val parsed = readCache()
-        if (parsed == null) {
-            _state.value = Top250State.Idle
-        } else {
-            applyRanks(parsed.ranks, parsed.fetchedAtMillis, fromCache = true)
-        }
-        _state.value
-    }
-
-    /** 联网刷新榜单；失败时保留旧缓存，只把错误写进返回值。 */
-    suspend fun refresh(): Top250RefreshResult = withContext(ioDispatcher) {
-        val endpoint = settingsRepository.top250Endpoint()
-        _state.value = Top250State.Loading
-        val startedAt = SystemClock.elapsedRealtime()
-        val result = runCatching {
-            val request = Request.Builder()
-                .url(endpoint)
-                .header("Accept", "application/json")
-                .header("User-Agent", USER_AGENT)
-                .build()
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) error("榜单请求失败 HTTP ${response.code}: $endpoint")
-                val body = response.body?.string().orEmpty()
-                if (body.isBlank()) error("榜单响应为空: $endpoint")
-                val ranks = Top250PayloadParser.parse(body)
-                if (ranks.isEmpty()) error("榜单响应里没有可识别的条目: $endpoint")
-                ranks
+    suspend fun fetchOnDemand(): Top250RefreshResult = withContext(ioDispatcher) {
+        operationMutex.withLock {
+            val dir = directory()
+            dir.mkdirs()
+            val marker = File(dir, MARKER_NAME)
+            val result = if (!marker.isFile) {
+                fetchInitial(dir)
+            } else {
+                fetchLatest(dir)
             }
+            publishStatus(isLoading = false, completed = 0, total = 0)
+            result
         }
+    }
 
-        result.fold(
-            onSuccess = { ranks ->
-                val now = System.currentTimeMillis()
-                writeCache(ranks, now)
-                applyRanks(ranks, now, fromCache = false)
-                Top250RefreshResult(
-                    total = ranks.size,
-                    matched = countMatched(ranks),
-                    fetchedAtMillis = now,
-                    fromNetwork = true
-                )
-            },
-            onFailure = { error ->
-                // 刷新失败不清缓存：保留上一份榜单，用户不会因为断网突然丢失角标。
-                if (_state.value is Top250State.Loading) {
-                    _state.value = if (ranksByNumber.isEmpty()) {
-                        Top250State.Error(error.message ?: "榜单刷新失败")
-                    } else {
-                        Top250State.Ready(ranksByNumber, cachedStatus.fetchedAtMillis, fromCache = true)
-                    }
+    /**
+     * 卡片角标查询：先总榜，再 2026 降序到 2008，返回**首个**命中。
+     *
+     * 顺序是刻意的 —— 同时上总榜与年度榜的影片，卡片上只显示总榜名次
+     * （总榜含金量更高，且卡片宽度只够一个角标）。详情页才展示全部。
+     */
+    suspend fun cardRankFor(number: String): Top250CardRank? = withContext(ioDispatcher) {
+        val key = normalizeNumber(number)
+        if (key.isEmpty()) return@withContext null
+        val dir = directory()
+        val all = readRankings(dir, "all")
+        val allRanking = all?.get(key)
+        if (allRanking != null) return@withContext Top250CardRank(allRanking, null)
+        for (year in YEAR_RANGE.reversed()) {
+            val yearly = readRankings(dir, "year-$year")
+            val ranking = yearly?.get(key)
+            if (ranking != null) return@withContext Top250CardRank(ranking, year)
+        }
+        null
+    }
+
+    /**
+     * 详情页查询：返回**全部**命中，总榜在前、其后 2026 降序到 2008，最多 20 条。
+     */
+    suspend fun ranksFor(number: String): List<Top250Rank> = withContext(ioDispatcher) {
+        val key = normalizeNumber(number)
+        if (key.isEmpty()) return@withContext emptyList()
+        val dir = directory()
+        val ranks = ArrayList<Top250Rank>(YEAR_RANGE.count() + 1)
+        readRankings(dir, "all")?.get(key)?.let { ranks += Top250Rank(it, "总榜 TOP250", null) }
+        for (year in YEAR_RANGE.reversed()) {
+            readRankings(dir, "year-$year")?.get(key)?.let { ranks += Top250Rank(it, "$year 年度 TOP250", year) }
+        }
+        ranks
+    }
+
+    /**
+     * 榜单页用：读出某一榜的完整名次表（归一化番号 → 名次）。
+     * 年份越界或文件缺失一律返回空表，由调用方出空态。
+     */
+    suspend fun rankingsForList(year: Int?): Map<String, Int> = withContext(ioDispatcher) {
+        if (year != null && year !in YEAR_RANGE) return@withContext emptyMap()
+        val name = year?.let { "year-$it" } ?: "all"
+        readRankings(directory(), name) ?: emptyMap()
+    }
+
+    // ---- 内部实现 ----
+
+    private fun directory(): File = File(context.filesDir, DIRECTORY_NAME)
+
+    private fun fetchInitial(dir: File): Top250RefreshResult {
+        val names = listOf("all", "year-2026") + YEAR_RANGE.filter { it < 2026 }.map { "year-$it" }
+        val updated = ArrayList<String>(names.size)
+        val failed = ArrayList<String>()
+        publishStatus(isLoading = true, completed = 0, total = names.size)
+        names.forEachIndexed { index, name ->
+            // 首次流程允许断点续拉：已落盘的文件跳过下载但仍计入 updated。
+            val target = File(dir, "$name.json")
+            if (target.isFile) {
+                updated += name
+            } else {
+                try {
+                    fetchAndSave(dir, name)
+                    updated += name
+                } catch (error: Exception) {
+                    failed += name
                 }
-                Top250RefreshResult(
-                    total = ranksByNumber.size,
-                    matched = 0,
-                    fetchedAtMillis = cachedStatus.fetchedAtMillis,
-                    fromNetwork = false,
-                    error = error.message ?: "榜单刷新失败（耗时 ${SystemClock.elapsedRealtime() - startedAt}ms）"
-                )
             }
+            publishStatus(isLoading = true, completed = index + 1, total = names.size)
+        }
+        writeMarker(dir)
+        return Top250RefreshResult(updated = updated, failed = failed, initial = true)
+    }
+
+    private fun fetchLatest(dir: File): Top250RefreshResult {
+        val names = listOf("all", "year-2026")
+        val updated = ArrayList<String>(names.size)
+        val failed = ArrayList<String>()
+        publishStatus(isLoading = true, completed = 0, total = names.size)
+        names.forEachIndexed { index, name ->
+            try {
+                fetchAndSave(dir, name)
+                updated += name
+            } catch (error: Exception) {
+                failed += name
+            }
+            publishStatus(isLoading = true, completed = index + 1, total = names.size)
+        }
+        return Top250RefreshResult(updated = updated, failed = failed, initial = false)
+    }
+
+    private fun fetchAndSave(dir: File, name: String): Map<String, Int> {
+        val request = Request.Builder().url(BASE_URL + name + ".json").build()
+        val text = client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IllegalStateException("TOP250 HTTP " + response.code)
+            val body = response.body ?: throw IllegalStateException("TOP250 response is empty")
+            body.string().ifEmpty { throw IllegalStateException("TOP250 response is empty") }
+        }
+        val parsed = parseRankings(text)
+        if (parsed.isEmpty()) throw IllegalStateException("TOP250 list is empty")
+        // AtomicFile：先写临时文件再 rename，保证磁盘上要么没有、要么是完整内容，
+        // 中途断电不会留下半份 JSON 让下次解析炸掉。
+        val atomic = AtomicFile(File(dir, "$name.json"))
+        var stream: FileOutputStream? = null
+        try {
+            stream = atomic.startWrite()
+            stream.write(text.toByteArray(Charsets.UTF_8))
+            atomic.finishWrite(stream)
+        } catch (error: IOException) {
+            stream?.let { atomic.failWrite(it) }
+            throw error
+        }
+        synchronized(parsedCache) { parsedCache[name] = parsed }
+        return parsed
+    }
+
+    private fun writeMarker(dir: File) {
+        runCatching { File(dir, MARKER_NAME).writeText("1", Charsets.UTF_8) }
+    }
+
+    private fun readRankings(dir: File, name: String): Map<String, Int>? {
+        synchronized(parsedCache) { parsedCache[name]?.let { return it } }
+        val file = File(dir, "$name.json")
+        if (!file.isFile) return null
+        val parsed = try {
+            parseRankings(file.readText(Charsets.UTF_8))
+        } catch (error: Throwable) {
+            // 解析失败不写缓存：文件可能正在被 AtomicFile 替换，下次读还能自愈。
+            return null
+        }
+        synchronized(parsedCache) { parsedCache[name] = parsed }
+        return parsed
+    }
+
+    private fun publishStatus(isLoading: Boolean, completed: Int, total: Int): Top250CacheStatus {
+        val dir = directory()
+        val next = Top250CacheStatus(
+            allCached = File(dir, "all.json").isFile,
+            cachedYears = YEAR_RANGE.filter { File(dir, "year-$it.json").isFile },
+            initialAttempted = File(dir, MARKER_NAME).isFile,
+            isLoading = isLoading,
+            completed = completed,
+            total = total,
+            revision = _status.value.revision + 1
         )
+        _status.value = next
+        return next
     }
 
-    /**
-     * 统计本地影片命中数。
-     *
-     * 用 [ranksByNumber] 与库内影片求交集，而不是直接返回榜单条数：
-     * 设置页要回答的是「这个开关对我有多大用」，这取决于命中率。
-     */
-    private fun countMatched(ranks: Map<String, Top250Rank>): Int {
-        // 这里不持有 MovieDao，避免数据层互相依赖；命中数由调用方用
-        // [matchedCount] 结合影片列表计算，默认返回榜单条数作为上界。
-        return ranks.size
-    }
+    companion object {
+        /** 5.0.5 实际使用的 CDN 目录，末尾必须带斜杠。 */
+        const val BASE_URL = "https://catembylegacy.fastcdn.dpdns.org/top250/"
 
-    /** 由 ViewModel 传入当前影片列表，算出榜单实际命中多少条。 */
-    fun matchedCount(movies: List<MovieEntity>): Int {
-        if (ranksByNumber.isEmpty()) return 0
-        return movies.count { rankOf(it) != null }
-    }
+        private const val DIRECTORY_NAME = "top250"
+        private const val MARKER_NAME = "initial-attempt-complete"
 
-    private fun applyRanks(ranks: Map<String, Top250Rank>, fetchedAtMillis: Long, fromCache: Boolean) {
-        ranksByNumber = ranks
-        cachedStatus = Top250CacheStatus(
-            cachedCount = ranks.size,
-            totalCount = ranks.size,
-            fetchedAtMillis = fetchedAtMillis
-        )
-        _state.value = Top250State.Ready(ranks, fetchedAtMillis, fromCache)
-    }
+        private val YEAR_RANGE = 2008..2026
 
-    private fun readCache(): CacheSnapshot? {
-        if (!cacheFile.isFile) return null
-        return runCatching {
-            val text = cacheFile.readText()
-            val root = JSONTokener(text).nextValue() as? JSONObject ?: return null
-            val fetchedAt = root.optLong(KEY_FETCHED_AT, 0L)
-            val list = root.optJSONArray(KEY_ENTRIES) ?: return null
-            val ranks = Top250PayloadParser.parseEntries(list, fetchedAt)
-            if (ranks.isEmpty()) null else CacheSnapshot(ranks, fetchedAt)
-        }.getOrNull()
-    }
+        /** 进程内解析缓存：磁盘权威，内存只是省掉重复解析。 */
+        private val parsedCache = LinkedHashMap<String, Map<String, Int>>()
 
-    private fun writeCache(ranks: Map<String, Top250Rank>, fetchedAtMillis: Long) {
-        runCatching {
-            val list = JSONArray()
-            ranks.values.sortedBy { it.rank }.forEach { rank ->
-                list.put(
-                    JSONObject()
-                        .put("rank", rank.rank)
-                        .put("number", rank.number)
-                        .put("title", rank.title ?: JSONObject.NULL)
-                )
+        private fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(12, TimeUnit.SECONDS)
+            .build()
+
+        /**
+         * 番号归一：按 codePoint 保留字母/数字（含非 ASCII），再 `toUpperCase(Locale.ROOT)`。
+         *
+         * 用 ROOT 而不是默认 Locale：土耳其语环境下 "i" 会变成 "İ"，与 CDN 里的键永远对不上。
+         */
+        fun normalizeNumber(value: String): String {
+            val builder = StringBuilder(value.length)
+            var index = 0
+            while (index < value.length) {
+                val codePoint = value.codePointAt(index)
+                if (Character.isLetterOrDigit(codePoint)) builder.appendCodePoint(codePoint)
+                index += Character.charCount(codePoint)
             }
-            val root = JSONObject()
-                .put(KEY_FETCHED_AT, fetchedAtMillis)
-                .put(KEY_ENTRIES, list)
-            val temp = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
-            temp.writeText(root.toString())
-            if (!temp.renameTo(cacheFile)) {
-                cacheFile.writeText(root.toString())
-                temp.delete()
+            return builder.toString().uppercase(Locale.ROOT)
+        }
+
+        /**
+         * 解析一份榜单。只读 `movies[].number` 与 `movies[].ranking`，
+         * 其余字段（标题、封面、链接）服务端可能给了但客户端从不使用。
+         *
+         * 名次只接受 1..250；同番号多条时 `putIfAbsent` 保留首次出现者。
+         */
+        fun parseRankings(text: String): Map<String, Int> {
+            val result = LinkedHashMap<String, Int>()
+            val movies = JSONObject(text).getJSONArray("movies")
+            for (index in 0 until movies.length()) {
+                val entry = movies.optJSONObject(index) ?: continue
+                val number = entry.optString("number")
+                val ranking = entry.optInt("ranking")
+                val key = normalizeNumber(number)
+                if (key.isEmpty()) continue
+                if (ranking < 1 || ranking > 250) continue
+                result.putIfAbsent(key, ranking)
             }
+            return result
         }
-    }
-
-    private data class CacheSnapshot(val ranks: Map<String, Top250Rank>, val fetchedAtMillis: Long)
-
-    private companion object {
-        const val CACHE_FILE_NAME = "javdb_top250_cache.json"
-        const val KEY_FETCHED_AT = "fetchedAtMillis"
-        const val KEY_ENTRIES = "entries"
-        const val USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Mobile Safari/537.36"
-    }
-}
-
-/**
- * 榜单载荷解析器。
- *
- * 单独抽出来的理由：加载端已经确认（[Top250RankingRepository] 的常量与 5.0.5
- * 的 `top250/` 子路径），但条目字段名没有可信样例可依，解析是最容易被上游
- * 接口变更打断的一层。把它隔离成一个纯函数对象后，字段规则变化只需要改这里，
- * 缓存格式与 UI 匹配逻辑都不用碰。
- */
-internal object Top250PayloadParser {
-    private val RANK_KEYS = listOf("rank", "ranking", "position", "order", "top", "index", "place", "no")
-    private val NUMBER_KEYS = listOf(
-        "number", "code", "id", "movieNumber", "movie_number", "videoNumber", "video_number",
-        "dvdId", "dvd_id", "javdbId", "javdb_id", "serial"
-    )
-    private val TITLE_KEYS = listOf("title", "name", "displayTitle", "display_title", "originalTitle")
-    private val ARRAY_KEYS = listOf(
-        "data", "list", "items", "rankings", "ranks", "movies", "results", "records",
-        "top250", "entries", "content"
-    )
-
-    fun parse(body: String): Map<String, Top250Rank> {
-        val root = JSONTokener(body).nextValue()
-        val array = findArray(root) ?: return emptyMap()
-        return parseEntries(array, System.currentTimeMillis())
-    }
-
-    fun parseEntries(array: JSONArray, fetchedAtMillis: Long): Map<String, Top250Rank> {
-        val byNumber = LinkedHashMap<String, Top250Rank>()
-        for (index in 0 until array.length()) {
-            val obj = array.optJSONObject(index) ?: continue
-            val entry = parseEntry(obj, fallbackRank = index + 1) ?: continue
-            // 同一番号可能在榜单里出现多次（不同番号写法），保留名次更靠前的那条。
-            val existing = byNumber[entry.number]
-            if (existing == null || entry.rank < existing.rank) {
-                byNumber[entry.number] = entry
-            }
-        }
-        return byNumber
-    }
-
-    /** 递归找承载条目的数组：顶层是数组直接返回，否则按常见键名找一层/两层。 */
-    private fun findArray(root: Any?): JSONArray? {
-        when (root) {
-            is JSONArray -> return root
-            is JSONObject -> {
-                for (key in ARRAY_KEYS) {
-                    when (val value = root.opt(key)) {
-                        is JSONArray -> return value
-                        is JSONObject -> findArray(value)?.let { return it }
-                    }
-                }
-                // 兜底：任一键下挂着元素像条目的数组即可（有些镜像把数据塞在 results.data 之类的位置）。
-                val keys = root.keys()
-                while (keys.hasNext()) {
-                    val value = root.opt(keys.next())
-                    if (value is JSONArray && looksLikeEntries(value)) return value
-                    if (value is JSONObject) findArray(value)?.let { return it }
-                }
-            }
-        }
-        return null
-    }
-
-    private fun looksLikeEntries(array: JSONArray): Boolean {
-        if (array.length() == 0) return false
-        val first = array.optJSONObject(0) ?: return false
-        return firstString(first, NUMBER_KEYS) != null
-    }
-
-    private fun parseEntry(obj: JSONObject, fallbackRank: Int): Top250Rank? {
-        val rawNumber = firstString(obj, NUMBER_KEYS) ?: nestedNumber(obj) ?: return null
-        val number = normalizeMovieNumber(rawNumber) ?: rawNumber.trim().uppercase(Locale.ROOT)
-        if (number.isBlank()) return null
-        val rank = firstInt(obj, RANK_KEYS) ?: fallbackRank
-        return Top250Rank(rank = rank, number = number, title = firstString(obj, TITLE_KEYS))
-    }
-
-    /** 有的镜像把番号塞在 `movie.number` / `video.code` 这类一层嵌套里。 */
-    private fun nestedNumber(obj: JSONObject): String? {
-        val keys = obj.keys()
-        while (keys.hasNext()) {
-            val child = obj.optJSONObject(keys.next()) ?: continue
-            firstString(child, NUMBER_KEYS)?.let { return it }
-        }
-        return null
-    }
-
-    private fun firstString(obj: JSONObject, keys: List<String>): String? {
-        for (key in keys) {
-            if (!obj.has(key)) continue
-            val value = obj.optString(key, "").trim()
-            if (value.isNotEmpty() && value != "null") return value
-        }
-        return null
-    }
-
-    private fun firstInt(obj: JSONObject, keys: List<String>): Int? {
-        for (key in keys) {
-            if (!obj.has(key)) continue
-            val direct = obj.optInt(key, Int.MIN_VALUE)
-            if (direct != Int.MIN_VALUE && direct > 0) return direct
-            // `"rank": "12"` / `"rank": "#12"` 两种字符串写法都出现过。
-            val text = obj.optString(key, "").trim().trimStart('#')
-            val parsed = text.toIntOrNull()
-            if (parsed != null && parsed > 0) return parsed
-        }
-        return null
     }
 }

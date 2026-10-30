@@ -508,7 +508,8 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                         onOpenMovie = { newMovieId ->
                             navController.popBackStack()
                             navController.navigate(Route.detail(newMovieId))
-                        }
+                        },
+                        onOpenTop250 = { year -> navController.navigate(Route.top250(year)) }
                     )
                 }
                 composable(
@@ -522,7 +523,12 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                     val filterValue = Uri.decode(entry.arguments?.getString("filterValue").orEmpty())
                     val viewModel: FilterResultViewModel = viewModel(
                         key = "filter-$filterType-$filterValue",
-                        factory = FilterResultViewModel.factory(filterType, filterValue, appContainer.movieRepository)
+                        factory = FilterResultViewModel.factory(
+                            filterType = filterType,
+                            filterValue = filterValue,
+                            repository = appContainer.movieRepository,
+                            top250Repository = appContainer.top250RankingRepository
+                        )
                     )
                     FilterResultScreen(
                         viewModel = viewModel,
@@ -813,6 +819,14 @@ private object Route {
 
     fun filterResult(filterType: String, filterValue: String) =
         "filterResult/${Uri.encode(filterType)}/${Uri.encode(filterValue)}"
+
+    /**
+     * TOP250 榜单页复用筛选结果页：year 为 null 走总榜，否则走年度榜。
+     * 不新开 destination——榜单页与筛选页的布局、分页、卡片完全一致，
+     * 只有数据来源和标题不同。
+     */
+    fun top250(year: Int?): String =
+        filterResult("top250", year?.let { "year-$it" } ?: "all")
 
     fun player(videoUri: String, title: String, fileName: String, movieId: Long = -1L) =
         "player/${Uri.encode(videoUri)}?title=${Uri.encode(title)}&fileName=${Uri.encode(fileName)}&movieId=$movieId"

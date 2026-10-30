@@ -66,6 +66,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -86,16 +87,18 @@ import androidx.compose.ui.zIndex
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.localmovielibrarz.data.local.MovieEntity
+import com.example.localmovielibrarz.data.repository.Top250Rank
 import com.example.localmovielibrarz.data.repository.MoviePlaybackPart
 import com.example.localmovielibrarz.scraper.ActorAvatarStore
 import com.example.localmovielibrarz.scraper.ScrapeEventLevel
 import com.example.localmovielibrarz.scraper.ScrapeTaskReport
 import com.example.localmovielibrarz.scraper.ScrapeTaskStatus
-import com.example.localmovielibrarz.ui.shared.LocalTop250BadgeSize
-import com.example.localmovielibrarz.ui.shared.LocalTop250RankOf
+import com.example.localmovielibrarz.ui.shared.LocalMovieCardBadgePresentation
+import com.example.localmovielibrarz.LocalMovieLibraryApp
 import com.example.localmovielibrarz.ui.shared.Top250ArtworkBadge
-import com.example.localmovielibrarz.ui.shared.Top250RankBadge
+import com.example.localmovielibrarz.ui.shared.Top250RankBadges
 import com.example.localmovielibrarz.ui.shared.UriImage
+import com.example.localmovielibrarz.util.extractMovieNumberInfo
 import com.example.localmovielibrarz.ui.shared.artworkCacheRevision
 import com.example.localmovielibrarz.util.detectMovieVariant
 import kotlinx.coroutines.delay
@@ -125,7 +128,8 @@ fun DetailScreen(
     onPlay: (videoUri: String, title: String, fileName: String) -> Unit,
     onFilterClick: (filterType: String, filterValue: String) -> Unit,
     onMovieClick: (Long) -> Unit,
-    onOpenMovie: (Long) -> Unit
+    onOpenMovie: (Long) -> Unit,
+    onOpenTop250: (Int?) -> Unit
 ) {
     val movie by viewModel.movie.collectAsStateWithLifecycle()
     val isScraping by viewModel.isScraping.collectAsStateWithLifecycle()
@@ -223,6 +227,7 @@ fun DetailScreen(
                     onActorClick = { onFilterClick("actor", it) },
                     onTagClick = { onFilterClick("tag", it) },
                     onGenreClick = { onFilterClick("genre", it) },
+                    onTop250Click = onOpenTop250,
                     similarMovies = similarMovies,
                     onSimilarClick = onMovieClick
                 )
@@ -342,6 +347,7 @@ fun MovieDetailScreen(
     onActorClick: (String) -> Unit,
     onTagClick: (String) -> Unit,
     onGenreClick: (String) -> Unit,
+    onTop250Click: (Int?) -> Unit,
     similarMovies: List<MovieEntity>,
     onSimilarClick: (Long) -> Unit
 ) {
@@ -377,7 +383,11 @@ fun MovieDetailScreen(
                 modifier = Modifier.padding(horizontal = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                MobileTitleBlock(movie = movie, onGenreClick = onGenreClick)
+                MobileTitleBlock(
+                    movie = movie,
+                    onGenreClick = onGenreClick,
+                    onTop250Click = onTop250Click
+                )
                 scrapeFailureReason?.let { reason ->
                     ScrapeFailureNotice(
                         reason = reason,
@@ -576,16 +586,36 @@ private fun MobileHeroImage(movie: MovieEntity) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun MobileTitleBlock(movie: MovieEntity, onGenreClick: (String) -> Unit) {
+private fun MobileTitleBlock(
+    movie: MovieEntity,
+    onGenreClick: (String) -> Unit,
+    onTop250Click: (Int?) -> Unit
+) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // 榜单名次：命中 JavDB TOP 榜单时在标题上方补一枚角标，
-        // 与影片卡片的左上角角标同源（LocalTop250RankOf），开关也共享同一个设置项。
-        // 详情页不跟随卡片的三档尺寸：标题区空间充足，固定用详情页尺寸更稳。
-        val top250BadgeSize = LocalTop250BadgeSize.current
-        val top250Rank = LocalTop250RankOf.current(movie)
-        if (top250BadgeSize.isVisible && top250Rank != null) {
-            Top250RankBadge(rank = top250Rank)
+        // 榜单名次：命中 TOP 榜单时在标题上方铺一行徽章（总榜 + 各年度，最多 20 枚）。
+        // 与影片卡片同源（同一个缓存版本号驱动刷新），开关也共享同一个设置项。
+        val badgePresentation = LocalMovieCardBadgePresentation.current
+        val detailContext = LocalContext.current
+        val detailRepository = (detailContext.applicationContext as? LocalMovieLibraryApp)
+            ?.container
+            ?.top250RankingRepository
+        val detailNumber = extractMovieNumberInfo(movie.videoName)?.number
+            ?: extractMovieNumberInfo(movie.title)?.number
+        val top250Ranks by produceState<List<Top250Rank>>(
+            initialValue = emptyList(),
+            movie.id,
+            movie.videoName,
+            movie.title,
+            badgePresentation.showTopGoldBadge,
+            badgePresentation.cacheRevision
+        ) {
+            value = emptyList()
+            val repo = detailRepository ?: return@produceState
+            val key = detailNumber ?: return@produceState
+            value = repo.ranksFor(key)
         }
+        // 空列表时 Top250RankBadges 自己就整块不渲染，这里不必再判一次。
+        Top250RankBadges(ranks = top250Ranks, onTop250Click = onTop250Click)
         Text(
             text = movie.title,
             color = MaterialTheme.colorScheme.onSurface,

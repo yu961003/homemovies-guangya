@@ -150,7 +150,7 @@ fun FilterResultScreen(
             )
         }
         if (displayMovies.isEmpty()) {
-            FilterEmptyState()
+            FilterEmptyState(text = uiState.emptyText)
         } else {
             LazyVerticalGrid(
                 state = gridState,
@@ -285,7 +285,7 @@ private fun ResultPosterCard(movie: MovieEntity, imageMode: HomeImageMode, onCli
 }
 
 @Composable
-private fun FilterEmptyState() {
+private fun FilterEmptyState(text: String) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -295,7 +295,7 @@ private fun FilterEmptyState() {
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = "\u6CA1\u6709\u627E\u5230\u76F8\u5173\u5F71\u7247",
+            text = text.ifBlank { "\u6CA1\u6709\u627E\u5230\u76F8\u5173\u5F71\u7247" },
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold

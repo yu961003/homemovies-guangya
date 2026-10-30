@@ -134,10 +134,7 @@ class AppContainer(context: Context) {
      * 它自己维护内存里的名次表和一份磁盘缓存，所以整个 App 只需要一个实例。
      */
     val top250RankingRepository by lazy {
-        Top250RankingRepository(
-            context = appContext,
-            settingsRepository = settingsRepository
-        )
+        Top250RankingRepository(context = appContext)
     }
     val cloud115StrmRepository by lazy {
         Cloud115StrmRepository(

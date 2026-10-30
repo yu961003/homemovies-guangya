@@ -1,173 +1,239 @@
 package com.example.localmovielibrarz.ui.shared
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.CornerBasedShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.EmojiEvents
+import androidx.compose.material.icons.rounded.WorkspacePremium
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.localmovielibrarz.LocalMovieLibraryApp
 import com.example.localmovielibrarz.data.local.MovieEntity
-import com.example.localmovielibrarz.data.repository.Top250BadgeSize
+import com.example.localmovielibrarz.data.repository.Top250CardRank
 import com.example.localmovielibrarz.data.repository.Top250Rank
-import com.example.localmovielibrarz.data.repository.Top250State
-import com.example.localmovielibrarz.ui.AppRadius
+import com.example.localmovielibrarz.util.extractMovieNumberInfo
 
 /**
- * 榜单标识（JavDB TOP 榜）。
+ * 榜单标识配色与图标（移植自 5.0.5 的 `object Top250BadgeStyle`）。
  *
- * 视觉口径与 4.0.0 一致：颜色只取主题语义色（`tertiary` 在本工程里就是暖金色，
- * 正好对应「金榜」含义），圆角走 [AppRadius]，字号由调用方给 TextUnit，
- * 不引入新的硬编码色值 —— 4.0.0 的设计 token 层就是为了收敛这类散装数值。
+ * 六色两图标由 5.0.5 字节码直接读出，未按本工程主题重算：
+ * 总榜是「金」、年度是「蓝灰」—— 这是两者唯一的视觉区分信号。
+ * 换成主题语义色会把这个信号抹掉（一张 8sp 的小角标上，tertiary/secondary 几乎无法分辨）。
+ */
+object Top250BadgeStyle {
+    /** 总榜底色（暖金）。 */
+    private val GoldBackground = Color(0xFFFFCF56)
+
+    /** 总榜文字色（深金棕）。 */
+    private val GoldForeground = Color(0xFF4A3100)
+
+    /** 总榜名次章底色（深琥珀）。 */
+    private val GoldRankBackground = Color(0xFF59410B)
+
+    /** 年度榜底色（浅蓝灰）。 */
+    private val YearBackground = Color(0xFFACC9D8)
+
+    /** 年度榜文字色（深蓝）。 */
+    private val YearForeground = Color(0xFF16394B)
+
+    /** 年度榜名次章底色（深蓝灰）。 */
+    private val YearRankBackground = Color(0xFF29485A)
+
+    fun background(year: Int?): Color = if (year == null) GoldBackground else YearBackground
+
+    fun foreground(year: Int?): Color = if (year == null) GoldForeground else YearForeground
+
+    fun rankBackground(year: Int?): Color = if (year == null) GoldRankBackground else YearRankBackground
+
+    fun icon(year: Int?): ImageVector =
+        if (year == null) Icons.Rounded.EmojiEvents else Icons.Rounded.WorkspacePremium
+}
+
+/**
+ * 卡片角标的呈现参数。
  *
- * 三种尺寸对应 5.0.5 的 BADGE_ICON_LARGE / SMALL / NONE：
- * - [Top250Badge] 用于影片卡片左上角（小、单行、只显示名次）
- * - [Top250RankBadges] 用于详情页（大、可显示多条）
- * - 关闭开关时调用方直接不组合，等于 NONE
+ * [cacheRevision] 来自 `Top250CacheStatus.revision`，是唯一的全局失效信号：
+ * 任一份榜单落盘 revision 就 +1，卡片角标的 `produceState` 把它当 key 重查，
+ * 因此设置页刷新后不需要重启 App 就能看到新名次。
+ *
+ * 只保留金标开关：本工程（4.0.0 谱系）的卡片本来就有自己的收藏心与配色，
+ * 5.0.5 的 `card_favorite_heart_enabled` / `detail_favorite_color` 是给
+ * 它自己那套心形实现用的，照搬会与本工程已有的心形重复渲染。
+ */
+data class MovieCardBadgePresentation(
+    val showTopGoldBadge: Boolean,
+    val cacheRevision: Int
+)
+
+/** 卡片角标上下文默认值：不显示金标、缓存版本 0。 */
+val LocalMovieCardBadgePresentation = staticCompositionLocalOf {
+    MovieCardBadgePresentation(showTopGoldBadge = false, cacheRevision = 0)
+}
+
+/**
+ * 影片卡片上的 TOP 金标（右下角 pill）。
+ *
+ * 调用处必须已经在 `Box` 内 —— 它靠 `align` 定位，不参与父布局测量。
+ *
+ * 位置选右下而不是左上：本工程的卡片右上被收藏心（18dp）与批选圈（24dp）占用、
+ * 左下被刮削状态文字占用，右下是唯一长期空着的角。
  */
 @Composable
-fun Top250Badge(
-    rank: Int,
-    modifier: Modifier = Modifier,
-    prefix: String = "TOP",
-    shape: CornerBasedShape = AppRadius.XS,
-    fontSize: TextUnit = 10.sp,
-    horizontalPadding: Int = 5,
-    verticalPadding: Int = 2
-) {
-    if (rank <= 0) return
+fun BoxScope.Top250ArtworkBadge(movie: MovieEntity) {
+    val presentation = LocalMovieCardBadgePresentation.current
+    if (!presentation.showTopGoldBadge) return
+
+    // 番号优先取 videoName，取不到才回退 title —— 与 5.0.5 一致：
+    // videoName 是文件名，带番号的概率远高于刮削后的中文标题。
+    val number = extractMovieNumberInfo(movie.videoName)?.number
+        ?: extractMovieNumberInfo(movie.title)?.number
+    val context = LocalContext.current
+    val repository = (context.applicationContext as? LocalMovieLibraryApp)
+        ?.container
+        ?.top250RankingRepository
+
+    val cardRank by produceState<Top250CardRank?>(
+        initialValue = null,
+        movie.id,
+        movie.videoName,
+        movie.title,
+        presentation.showTopGoldBadge,
+        presentation.cacheRevision
+    ) {
+        value = null
+        val repo = repository ?: return@produceState
+        val key = number ?: return@produceState
+        value = repo.cardRankFor(key)
+    }
+
+    val rank = cardRank ?: return
     Row(
-        modifier = modifier
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.tertiary)
-            .padding(horizontal = horizontalPadding.dp, vertical = verticalPadding.dp),
+        modifier = Modifier
+            .align(Alignment.BottomEnd)
+            .padding(4.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(Top250BadgeStyle.background(rank.year))
+            .padding(horizontal = 4.dp, vertical = 1.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
+        Icon(
+            imageVector = Top250BadgeStyle.icon(rank.year),
+            contentDescription = null,
+            tint = Top250BadgeStyle.foreground(rank.year),
+            modifier = Modifier.size(9.dp)
+        )
         Text(
-            text = if (prefix.isBlank()) "$rank" else "$prefix $rank",
-            color = MaterialTheme.colorScheme.onTertiary,
-            style = MaterialTheme.typography.labelSmall,
+            text = cardRankText(rank),
+            color = Top250BadgeStyle.foreground(rank.year),
+            fontSize = 8.sp,
             fontWeight = FontWeight.Bold,
-            fontSize = fontSize,
             maxLines = 1
         )
     }
 }
 
+/** 卡片角标文案：总榜与年度句式不同，年度那句的「年度」前有一个空格。 */
+private fun cardRankText(rank: Top250CardRank): String =
+    if (rank.year == null) {
+        "总榜 TOP250 第${rank.ranking}名"
+    } else {
+        "${rank.year} 年度 TOP250 第${rank.ranking}名"
+    }
+
 /**
- * 详情页角标：显示该片在榜单上的名次（可能同时命中多个榜）。
+ * 详情页徽章行（移植自 5.0.5 的 `Top250RankBadges`）。
  *
- * 与卡片角标共用同一份 [Top250Rank]，避免两处各算一遍名次。
- * 按名次升序取前 [maxVisible] 条，超出部分不显示，避免详情页标题行被撑开。
+ * 一枚 = 名次章 `No.N`（深色底白字）+ 图标 + 榜单名。总榜在前，其后 2026 降序到 2008，
+ * 最多 20 枚，因此用 [FlowRow] 自动换行而不是横向滚动 —— 详情页整体是纵向滚动的，
+ * 内嵌横向滚动区会让手势方向变得难以预测。
+ *
+ * 空列表整块不渲染（没有「暂无排名」占位）：绝大多数影片不在榜上，
+ * 给它们显示一行「暂无」纯属噪音。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Top250RankBadges(
     ranks: List<Top250Rank>,
-    modifier: Modifier = Modifier,
-    maxVisible: Int = 2
+    onTop250Click: (Int?) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     if (ranks.isEmpty()) return
-    Row(
+    FlowRow(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        ranks.sortedBy { it.rank }.take(maxVisible).forEach { rank ->
-            Top250Badge(
-                rank = rank.rank,
-                prefix = "TOP",
-                fontSize = 12.sp,
-                horizontalPadding = 7,
-                verticalPadding = 3
-            )
+        ranks.forEach { rank ->
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Top250BadgeStyle.background(rank.year))
+                    .clickable { onTop250Click(rank.year) }
+                    .padding(2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "No.${rank.ranking}",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Top250BadgeStyle.rankBackground(rank.year))
+                        .padding(9.dp)
+                )
+                Icon(
+                    imageVector = Top250BadgeStyle.icon(rank.year),
+                    contentDescription = null,
+                    tint = Top250BadgeStyle.foreground(rank.year),
+                    modifier = Modifier.size(15.dp)
+                )
+                Text(
+                    text = rank.label,
+                    color = Top250BadgeStyle.foreground(rank.year),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(end = 6.dp)
+                )
+            }
         }
     }
 }
 
-/** 单条命中的详情页角标（影片只会命中一条榜单记录时用这个重载）。 */
-@Composable
-fun Top250RankBadge(rank: Top250Rank?, modifier: Modifier = Modifier) {
-    if (rank == null) return
-    Top250Badge(
-        rank = rank.rank,
-        prefix = "TOP",
-        modifier = modifier,
-        fontSize = 12.sp,
-        horizontalPadding = 7,
-        verticalPadding = 3
-    )
-}
-
 /**
- * 海报左上角的榜单角标叠层（[BoxScope] 扩展，调用处必须已经在 Box 内）。
+ * 在组合树根部装配卡片角标上下文。
  *
- * 首页网格、横向轮播、搜索结果、收藏、筛选结果都各自有一块海报区域，
- * 但角标的口径必须完全一致（位置、留白、字号、开关），因此把「读开关 + 查名次 +
- * 定位到 TopStart」这三步收敛成一个叠层组件，各页面只叠一层，不再各写一遍。
- * 关闭开关时直接不组合，等价 5.0.5 的 NONE 档。
- */
-@Composable
-fun BoxScope.Top250ArtworkBadge(movie: MovieEntity) {
-    val size = LocalTop250BadgeSize.current
-    if (!size.isVisible) return
-    val rank = LocalTop250RankOf.current(movie) ?: return
-    // 三档只差字号与内边距：Large 用于宽松网格（卡片更宽），Small 用于密集场景。
-    val large = size == Top250BadgeSize.Large
-    Top250Badge(
-        rank = rank.rank,
-        modifier = Modifier
-            .align(Alignment.TopStart)
-            .padding(if (large) 7.dp else 5.dp),
-        fontSize = if (large) 12.sp else 9.sp,
-        horizontalPadding = if (large) 7 else 4,
-        verticalPadding = if (large) 3 else 1
-    )
-}
-
-/**
- * 卡片角标的取值上下文。
- *
- * 为什么用 CompositionLocal 而不是把名次一路传参：
- * 影片卡片出现的位置有首页网格、横向轮播、搜索结果、筛选项结果等多处，
- * 每处都改签名会把「榜单」这一个横切能力扩散成十几处改动；而它本身
- * 只影响卡片左上角的一个小角标，属于典型的局部环境信息。
- *
- * 尺寸只有 [LocalTop250BadgeSize] 一个真值源：早前先有的「开关」布尔
- * 现在退化成 `size.isVisible`，不再单独下发，避免两个 CompositionLocal
- * 需要同步（同步漏一处就会出现「设置关了但某页还画」）。
- */
-
-/** 角标尺寸；[Top250BadgeSize.None] 表示所有位置都不显示。 */
-val LocalTop250BadgeSize = staticCompositionLocalOf { Top250BadgeSize.Small }
-
-/** 影片 → 榜单名次；未加载或未命中都返回 null。 */
-val LocalTop250RankOf = staticCompositionLocalOf<(MovieEntity) -> Top250Rank?> { { null } }
-
-/**
- * 在组合树根部装配榜单角标上下文。
- *
- * 只在这里订阅一次仓储状态与设置开关：如果改成每张卡片各自订阅，
+ * 只在这里订阅一次设置与缓存版本：若改成每张卡各自订阅，
  * 首页 90 张卡就是 90 份订阅 + 90 次全量重组，滚动会明显掉帧。
  *
- * 榜单数据本身不在这里触发网络请求，只从磁盘缓存加载；刷新时机留给设置页，
- * 因为排行榜一天更新一次，冷启动联网并不划算。
+ * 这里**不触发网络请求**，只把磁盘缓存的状态版本下发给卡片；
+ * 刷新时机在设置页（榜单一天一更，冷启动联网不划算）。
  */
 @Composable
 fun Top250BadgeProvider(content: @Composable () -> Unit) {
@@ -177,25 +243,15 @@ fun Top250BadgeProvider(content: @Composable () -> Unit) {
         content()
         return
     }
-    val repository = container.top250RankingRepository
     val settingsRepository = container.settingsRepository
-    val badgeSize by settingsRepository.observeCardTopGoldBadgeSize()
-        .collectAsState(initial = settingsRepository.cardTopGoldBadgeSize())
-    val badgeState by repository.state.collectAsState()
-    LaunchedEffect(repository) {
-        if (repository.state.value is Top250State.Idle) repository.loadFromCache()
-    }
-    // 缓存没命中时 rankOf 恒为 null，卡片自然不画角标，不需要额外的分支。
-    val ready = badgeState is Top250State.Ready
-    val rankOf: (MovieEntity) -> Top250Rank? = if (ready) {
-        { movie -> repository.rankOf(movie) }
-    } else {
-        { _ -> null }
-    }
+    val status by container.top250RankingRepository.status.collectAsState()
+    val enabled by settingsRepository.observeCardTopGoldBadgeEnabled()
+        .collectAsState(initial = settingsRepository.isCardTopGoldBadgeEnabled())
     CompositionLocalProvider(
-        LocalTop250BadgeSize provides badgeSize,
-        LocalTop250RankOf provides rankOf,
+        LocalMovieCardBadgePresentation provides MovieCardBadgePresentation(
+            showTopGoldBadge = enabled,
+            cacheRevision = status.revision
+        ),
         content = content
     )
 }
-

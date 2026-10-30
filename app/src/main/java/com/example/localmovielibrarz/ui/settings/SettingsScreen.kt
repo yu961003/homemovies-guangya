@@ -109,8 +109,6 @@ import com.example.localmovielibrarz.data.local.CloudVideoTaskEntity
 import com.example.localmovielibrarz.data.local.CloudVideoTaskStatus
 import com.example.localmovielibrarz.data.repository.AppSettingsRepository
 import com.example.localmovielibrarz.data.repository.DailyUsageStats
-import com.example.localmovielibrarz.data.repository.Top250BadgeSize
-import com.example.localmovielibrarz.data.repository.Top250State
 import com.example.localmovielibrarz.data.repository.UsageStatsRepository
 import com.example.localmovielibrarz.scraper.CustomJsonScrapeConfig
 import com.example.localmovielibrarz.scraper.CustomJsonPathCandidate
@@ -1638,90 +1636,56 @@ private fun TopRankingSettingsPage() {
     val repository = app.container.top250RankingRepository
     val scope = rememberCoroutineScope()
 
-    val state by repository.state.collectAsStateWithLifecycle()
-    var badgeSize by remember { mutableStateOf(settingsRepository.cardTopGoldBadgeSize()) }
-    var endpoint by remember { mutableStateOf(settingsRepository.top250Endpoint()) }
+    val status by repository.status.collectAsStateWithLifecycle()
+    var badgeEnabled by remember { mutableStateOf(settingsRepository.isCardTopGoldBadgeEnabled()) }
     var message by remember { mutableStateOf<String?>(null) }
     var refreshing by remember { mutableStateOf(false) }
-    // 「本地影片命中 N 条」：命中数依赖影片列表，而设置页本身不持有影片库，
-    // 所以这里按需取一次首页同源的列表算完就丢，不缓存也不订阅（榜单一天一更，
-    // 为它常驻一个数据库观察者不值）。state 变化时重算，刷新后能立刻看到新数字。
-    var matchedSummary by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    LaunchedEffect(state) {
-        if (state is Top250State.Ready) {
-            val movies = app.container.movieRepository.observeMovies().first()
-            matchedSummary = repository.matchedCount(movies) to movies.size
-        }
+
+    // 进页面只读磁盘重算状态，不联网：让「已缓存年份」反映真实文件，
+    // 而不是上次刷新留在内存里的旧快照。
+    LaunchedEffect(repository) {
+        repository.readStatus()
     }
 
-    SettingsGroupCard(title = "卡片标识") {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = "角标尺寸",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
-            )
-            // 三档而不是开关：密集网格里「有但更小」是真实诉求，开关表达不了；
-            // 第三档「不显示」同时覆盖原来关闭开关的语义，因此不再需要第二个控件。
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                Top250BadgeSize.entries.forEachIndexed { index, size ->
-                    SegmentedButton(
-                        selected = badgeSize == size,
-                        onClick = {
-                            badgeSize = size
-                            settingsRepository.saveCardTopGoldBadgeSize(size)
-                        },
-                        shape = SegmentedButtonDefaults.itemShape(
-                            index = index,
-                            count = Top250BadgeSize.entries.size
-                        )
-                    ) { Text(size.label()) }
-                }
+    SettingsGroupCard(title = "影片卡片角标") {
+        SettingsSwitchRow(
+            title = "TOP 金标",
+            subtitle = "已缓存榜单中的上榜影片显示金标",
+            checked = badgeEnabled,
+            onCheckedChange = {
+                badgeEnabled = it
+                settingsRepository.saveCardTopGoldBadgeEnabled(it)
             }
-            Text(
-                text = "角标显示在影片卡片左上角（右上角是收藏与多选）。选「不显示」时任意位置都不再出现名次。",
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
+        )
     }
 
-    SettingsGroupCard(title = "榜单数据") {
+    SettingsGroupCard(title = "TOP250 榜单缓存") {
         Column(
             modifier = Modifier.fillMaxWidth().padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = when (val s = state) {
-                    is Top250State.Ready -> "已加载 ${s.ranks.size} 条名次" +
-                        if (s.fromCache) "（来自本地缓存）" else "（来自网络）"
-                    is Top250State.Loading -> "正在刷新…"
-                    is Top250State.Error -> "刷新失败：${s.message}"
-                    else -> "尚未加载榜单"
+                text = "仅点击按钮时联网。首次获取总榜和 2008–2026 年榜；之后只更新总榜与 2026 年榜。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = if (status.allCached) "总榜：已缓存" else "总榜：未缓存",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = "已缓存年份：" + if (status.cachedYears.isEmpty()) {
+                    "无"
+                } else {
+                    status.cachedYears.joinToString("、") { it.toString() }
                 },
                 style = MaterialTheme.typography.bodyMedium
             )
-            repository.cacheStatus().let { status ->
+            if (status.isLoading) {
                 Text(
-                    text = "本地缓存 ${status.cachedCount} 条" +
-                        if (status.fetchedAtMillis > 0) " · 更新于 ${formatTopRankTime(status.fetchedAtMillis)}" else "",
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-            // 完整度提示：答的是「开了角标为什么有些片子没有」——那类影片不在榜单里。
-            matchedSummary?.let { (matched, total) ->
-                Text(
-                    text = if (total > 0) {
-                        "番号匹配：本地 $total 部影片中 $matched 部命中榜单，其余不显示角标"
-                    } else {
-                        "本地影片库为空，扫库后这里会显示命中比例"
-                    },
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-                    style = MaterialTheme.typography.bodySmall
+                    text = "正在获取榜单 ${status.completed}/${status.total}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
             Button(
@@ -1730,60 +1694,35 @@ private fun TopRankingSettingsPage() {
                     refreshing = true
                     message = null
                     scope.launch {
-                        val result = repository.refresh()
+                        val result = repository.fetchOnDemand()
                         refreshing = false
-                        message = if (result.success) {
-                            // 刷新后立刻用同一份影片列表重算命中数，避免用户看到
-                            // 「榜单已更新」但下方完整度还是旧数字。
-                            val movies = app.container.movieRepository.observeMovies().first()
-                            val matched = repository.matchedCount(movies)
-                            matchedSummary = matched to movies.size
-                            "刷新完成：榜单共 ${result.total} 条，本地 ${movies.size} 部影片中 $matched 部命中"
+                        message = if (result.failed.isEmpty()) {
+                            if (result.initial) {
+                                "已获取并缓存 ${result.updated.size} 份榜单"
+                            } else {
+                                "榜单已更新：总榜与 2026 年榜"
+                            }
                         } else {
-                            "刷新失败：${result.error ?: "未知错误"}"
+                            "榜单获取完成，${result.failed.size} 份失败"
                         }
                     }
                 },
-                enabled = !refreshing,
-                modifier = Modifier.fillMaxWidth(),
-                shape = AppRadius.LG
+                enabled = !refreshing && !status.isLoading
             ) {
-                Text(if (refreshing) "正在刷新…" else "立即刷新榜单")
-            }
-            message?.let {
+                // 文案与 fetchOnDemand 的真实分支对齐：没跑过首次流程时拉全量 20 份，
+                // 之后只补总榜与当年榜。注意这与 5.0.5 的反汇编读出顺序相反
+                // （规格书 4.2 记的是 initialAttempted==false → "更新总榜与 2026 年榜"），
+                // 但那与它自己的抓取分支矛盾，按行为一致性优先取后者。
                 Text(
-                    text = it,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                    style = MaterialTheme.typography.bodySmall
+                    if (status.initialAttempted) {
+                        "更新总榜与 2026 年榜"
+                    } else {
+                        "获取并缓存全部榜单"
+                    }
                 )
             }
-        }
-    }
-
-    SettingsGroupCard(title = "数据源") {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            OutlinedTextField(
-                value = endpoint,
-                onValueChange = { endpoint = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                shape = AppRadius.LG,
-                label = { Text("榜单地址") }
-            )
-            Text(
-                text = "留空或填非 http(s) 地址会回落到内置地址。镜像不可用时可以换成自己的同构接口。",
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-                style = MaterialTheme.typography.bodySmall
-            )
-            Button(
-                onClick = { settingsRepository.saveTop250Endpoint(endpoint) },
-                modifier = Modifier.fillMaxWidth(),
-                shape = AppRadius.LG
-            ) {
-                Text("保存地址")
+            message?.let {
+                Text(text = it, style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -1794,15 +1733,15 @@ private fun TopRankingSettingsPage() {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = "· 名次按番号匹配：uniqueIds、文件名、标题依次尝试，与番号识别规则同源。",
+                text = "· 名次按番号匹配：先归一化番号（只留字母数字并转大写），再查榜单。",
                 style = MaterialTheme.typography.bodySmall
             )
             Text(
-                text = "· 启动只读本地缓存，不联网；榜单一天一更，需要新数据时手动刷新。",
+                text = "· 榜单数据来自预生成的静态文件，全部离线缓存；不联网、不拖慢首屏。",
                 style = MaterialTheme.typography.bodySmall
             )
             Text(
-                text = "· 刷新失败会保留上一次的成功结果，不会把已有角标清空。",
+                text = "· 同时上总榜与年度榜的影片，卡片只显示总榜名次；详情页会列出全部命中。",
                 style = MaterialTheme.typography.bodySmall
             )
         }
@@ -1903,11 +1842,6 @@ private fun JavdbScrapeSettingsCard() {
 }
 
 /** 三档角标的显示名。放在 UI 层：data 层的枚举只表达档位，不带用户可见文案。 */
-private fun Top250BadgeSize.label(): String = when (this) {
-    Top250BadgeSize.Large -> "大"
-    Top250BadgeSize.Small -> "小"
-    Top250BadgeSize.None -> "不显示"
-}
 
 @Composable
 private fun PlayerProgressBarSettingsPage(
