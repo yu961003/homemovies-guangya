@@ -28,6 +28,8 @@ import com.example.localmovielibrarz.data.repository.MovieMetadataRefreshRunner
 import com.example.localmovielibrarz.data.repository.MovieScrapeTaskRunner
 import com.example.localmovielibrarz.data.repository.ScrapeTaskSummary
 import com.example.localmovielibrarz.data.repository.StrmScrapeRepository
+import com.example.localmovielibrarz.playback.engine.Anime4kMode
+import com.example.localmovielibrarz.playback.engine.Anime4kQuality
 import com.example.localmovielibrarz.playback.engine.MpvHwdecMode
 import com.example.localmovielibrarz.playback.lut.LutParamKey
 import com.example.localmovielibrarz.playback.lut.LutParams
@@ -794,6 +796,42 @@ class SettingsViewModel(
         repository.saveMpvHwdecMode(mode)
         _uiState.update {
             it.copy(mpvHwdecMode = repository.getMpvHwdecMode(), savedMessage = "mpv 解码档位已切换")
+        }
+    }
+
+    /**
+     * Anime4K 三项。改完只落盘，**不立刻重建播放器**：
+     * 着色器链在 mpv_initialize() 之前下发（见 [MpvAnime4k.resolvePaths]），
+     * 运行期换链会重编 shader program 造成卡顿，因此统一「下次起播生效」。
+     * 文案里已写明这一点，避免用户以为开关是即时的。
+     */
+    fun updateMpvAnime4kEnabled(enabled: Boolean) {
+        repository.saveMpvAnime4kEnabled(enabled)
+        _uiState.update {
+            it.copy(
+                mpvAnime4kEnabled = repository.getMpvAnime4kEnabled(),
+                savedMessage = if (enabled) "Anime4K 已开启 · 下次起播生效" else "Anime4K 已关闭"
+            )
+        }
+    }
+
+    fun updateMpvAnime4kQuality(quality: Anime4kQuality) {
+        repository.saveMpvAnime4kQuality(quality)
+        _uiState.update {
+            it.copy(
+                mpvAnime4kQuality = repository.getMpvAnime4kQuality(),
+                savedMessage = "Anime4K 质量档已调整 · 下次起播生效"
+            )
+        }
+    }
+
+    fun updateMpvAnime4kMode(mode: Anime4kMode) {
+        repository.saveMpvAnime4kMode(mode)
+        _uiState.update {
+            it.copy(
+                mpvAnime4kMode = repository.getMpvAnime4kMode(),
+                savedMessage = "Anime4K 修复档已调整 · 下次起播生效"
+            )
         }
     }
 
@@ -1699,6 +1737,9 @@ class SettingsViewModel(
             playerSeekForwardSeconds = repository.getPlayerSeekForwardSeconds(),
             defaultPlaybackEngineIsMpv = repository.getDefaultPlaybackEngine() == AppSettingsRepository.PLAYER_ENGINE_MPV,
             mpvHwdecMode = repository.getMpvHwdecMode(),
+            mpvAnime4kEnabled = repository.getMpvAnime4kEnabled(),
+            mpvAnime4kQuality = repository.getMpvAnime4kQuality(),
+            mpvAnime4kMode = repository.getMpvAnime4kMode(),
             lutSettings = repository.getLutSettings(),
             externalSubtitleFontSizeSp = repository.getExternalSubtitleFontSizeSp(),
             externalSubtitleBottomPaddingPercent = repository.getExternalSubtitleBottomPaddingPercent(),
@@ -1844,6 +1885,10 @@ data class SettingsUiState(
     val defaultPlaybackEngineIsMpv: Boolean = false,
     /** mpv 解码默认档（含 AUTO）；播放页侧栏可以临时改，改完即写回这里。 */
     val mpvHwdecMode: MpvHwdecMode = MpvHwdecMode.AUTO,
+    /** Anime4K 超分开关 / 质量档 / 修复档（移植自 4.0.0 的 mpv_anime4k_*）。 */
+    val mpvAnime4kEnabled: Boolean = false,
+    val mpvAnime4kQuality: Anime4kQuality = Anime4kQuality.DEFAULT,
+    val mpvAnime4kMode: Anime4kMode = Anime4kMode.DEFAULT,
     /**
      * 实时调色（LUT）设置。
      *

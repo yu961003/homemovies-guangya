@@ -34,6 +34,7 @@ object MpvOptions {
         cacheDir: File,
         caFilePath: String?,
         targetLutPath: String? = null,
+        anime4kShaders: String? = null,
     ): List<Pair<String, String>> = buildList {
         // ── 渲染 ───────────────────────────────────────────────────────────────
         // exo: PlayerView 默认 SurfaceView 输出。mpv 对应 vo=gpu-next + android context。
@@ -171,6 +172,15 @@ object MpvOptions {
         // 于是表现为「开了调色和没开一样」。这里由引擎在 init 前同步生成好文件传进来。
         if (!targetLutPath.isNullOrBlank()) {
             add("target-lut" to targetLutPath)
+        }
+
+        // Anime4K 超分/降噪着色器链（移植自 4.0.0，见 [MpvAnime4k]）。
+        //
+        // 与 target-lut 同理：`glsl-shaders` 必须在 mpv_initialize() 之前下发才会在
+        // 第一次建 VO 时参与 shader 编译；init 之后再设等于重建管线，画面会闪一下。
+        // 这里只在下发值非空时写入，链为空/未启用就完全不出现在选项表里。
+        if (!anime4kShaders.isNullOrBlank()) {
+            add("glsl-shaders" to anime4kShaders)
         }
 
         // 截帧（自动分析调参的输入）。默认走 vo 的 FBO 路径，而 hwdec=mediacodec* 的

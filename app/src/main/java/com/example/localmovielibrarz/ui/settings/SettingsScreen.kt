@@ -137,6 +137,8 @@ import androidx.compose.foundation.layout.sizeIn
 import com.example.localmovielibrarz.ui.MinTouchTarget
 import com.example.localmovielibrarz.ui.ContentAlphaMin
 import com.example.localmovielibrarz.ui.ContentAlphaSecondary
+import com.example.localmovielibrarz.playback.engine.Anime4kMode
+import com.example.localmovielibrarz.playback.engine.Anime4kQuality
 import com.example.localmovielibrarz.playback.engine.MpvHwdecMode
 import com.example.localmovielibrarz.playback.lut.CubeLut
 import com.example.localmovielibrarz.playback.lut.LutParamKey
@@ -452,6 +454,9 @@ fun SettingsScreen(
                         onSeekForwardSecondsChange = viewModel::updatePlayerSeekForwardSeconds,
                         onDefaultEngineChange = viewModel::updateDefaultPlaybackEngine,
                         onMpvHwdecModeChange = viewModel::updateMpvHwdecMode,
+                        onMpvAnime4kEnabledChange = viewModel::updateMpvAnime4kEnabled,
+                        onMpvAnime4kQualityChange = viewModel::updateMpvAnime4kQuality,
+                        onMpvAnime4kModeChange = viewModel::updateMpvAnime4kMode,
                         onOpenSubtitle = { currentPage = SettingsPage.PlayerSubtitle },
                         onOpenProgressBar = { currentPage = SettingsPage.PlayerProgressBar },
                         onOpenColorGrade = { currentPage = SettingsPage.PlayerColorGrade },
@@ -1164,6 +1169,9 @@ private fun PlayerSettingsPage(
     onSeekForwardSecondsChange: (Int) -> Unit,
     onDefaultEngineChange: (Boolean) -> Unit,
     onMpvHwdecModeChange: (MpvHwdecMode) -> Unit,
+    onMpvAnime4kEnabledChange: (Boolean) -> Unit,
+    onMpvAnime4kQualityChange: (Anime4kQuality) -> Unit,
+    onMpvAnime4kModeChange: (Anime4kMode) -> Unit,
     onOpenSubtitle: () -> Unit,
     onOpenProgressBar: () -> Unit,
     onOpenColorGrade: () -> Unit,
@@ -1232,6 +1240,93 @@ private fun PlayerSettingsPage(
             Text(
                 text = uiState.mpvHwdecMode.subtitle,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+    SettingsGroupCard(title = "Anime4K 超分（mpv 内核）") {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "启用 Anime4K",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "用 CNN 着色器做实时修复与 2 倍超分。改档后下次起播生效（换链要重编 shader，运行期换会卡一下）。",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Switch(
+                    checked = uiState.mpvAnime4kEnabled,
+                    onCheckedChange = onMpvAnime4kEnabledChange
+                )
+            }
+            Text(
+                text = "质量档（模型大小）",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.bodySmall
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Anime4kQuality.entries.forEach { quality ->
+                    val selected = quality == uiState.mpvAnime4kQuality
+                    OutlinedButton(
+                        onClick = { onMpvAnime4kQualityChange(quality) },
+                        enabled = uiState.mpvAnime4kEnabled,
+                        colors = if (selected) {
+                            ButtonDefaults.outlinedButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                            )
+                        } else {
+                            ButtonDefaults.outlinedButtonColors()
+                        }
+                    ) {
+                        Text(if (selected) "✓ ${quality.label}" else quality.label)
+                    }
+                }
+            }
+            Text(
+                text = "修复档（着色器链）",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.bodySmall
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Anime4kMode.entries.chunked(2).forEach { pair ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        pair.forEach { mode ->
+                            val selected = mode == uiState.mpvAnime4kMode
+                            OutlinedButton(
+                                onClick = { onMpvAnime4kModeChange(mode) },
+                                enabled = uiState.mpvAnime4kEnabled,
+                                colors = if (selected) {
+                                    ButtonDefaults.outlinedButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                    )
+                                } else {
+                                    ButtonDefaults.outlinedButtonColors()
+                                }
+                            ) {
+                                Text(if (selected) "✓ ${mode.label}" else mode.label)
+                            }
+                        }
+                    }
+                }
+            }
+            Text(
+                text = "A+/B+/C+ 是双 pass（先修复再放大），A/B/C 是单 pass，更省电。" +
+                    "着色器随包分发（14 个 GLSL），首次起播会解到 filesDir。",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
                 style = MaterialTheme.typography.bodySmall
             )
         }

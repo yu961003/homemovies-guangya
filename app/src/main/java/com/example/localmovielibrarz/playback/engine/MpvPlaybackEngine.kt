@@ -199,7 +199,12 @@ class MpvPlaybackEngine(
      * 创建并初始化 mpv 实例。必须在主线程调用。
      * @return null 表示成功，否则返回面向用户的错误文案。
      */
-    fun initialize(initialLutSettings: LutSettings? = null): String? {
+    fun initialize(
+        initialLutSettings: LutSettings? = null,
+        anime4kEnabled: Boolean = false,
+        anime4kMode: Anime4kMode = Anime4kMode.DEFAULT,
+        anime4kQuality: Anime4kQuality = Anime4kQuality.DEFAULT,
+    ): String? {
         if (released) return "mpv 引擎已释放"
         if (created) return null
 
@@ -242,8 +247,22 @@ class MpvPlaybackEngine(
         // 调色（LUT）要在 init 之前就变成 --target-lut，理由见 prepareInitialLut()。
         val initialLutPath = prepareInitialLut(initialLutSettings)
 
+        // Anime4K 同理：glsl-shaders 必须在 mpv_initialize() 之前下发，见 [MpvAnime4k]。
+        // 任何一步失败都返回 null（本次以无超分起播），不让画质增强挡住播放。
+        val anime4kShaders = MpvAnime4k.resolvePaths(
+            context = context,
+            enabled = anime4kEnabled,
+            mode = anime4kMode,
+            quality = anime4kQuality,
+        )
+        if (anime4kShaders != null) {
+            Log.i(TAG, "启动前下发 Anime4K 链：$anime4kMode / $anime4kQuality")
+        } else if (anime4kEnabled) {
+            Log.w(TAG, "Anime4K 已启用但着色器不可用：本次以无超分起播")
+        }
+
         // 所有 --option 必须在 mpv_initialize() 之前设置，否则被静默忽略。
-        MpvOptions.build(context, hwdec, cacheDir, caFilePath, initialLutPath)
+        MpvOptions.build(context, hwdec, cacheDir, caFilePath, initialLutPath, anime4kShaders)
             .forEach { (key, value) ->
                 val ret = MPVLib.setOption(key, value)
                 if (ret < 0) Log.w(TAG, "设置 mpv 选项 $key=$value 失败: $ret")

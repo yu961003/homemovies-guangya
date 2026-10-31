@@ -9,6 +9,8 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.example.localmovielibrarz.cloud115.Cloud115CookieProvider
 import com.example.localmovielibrarz.cloud115.Cloud115LoginApps
+import com.example.localmovielibrarz.playback.engine.Anime4kMode
+import com.example.localmovielibrarz.playback.engine.Anime4kQuality
 import com.example.localmovielibrarz.playback.engine.MpvHwdecMode
 import com.example.localmovielibrarz.playback.lut.CubeLut
 import com.example.localmovielibrarz.playback.lut.LutParams
@@ -939,6 +941,39 @@ class AppSettingsRepository(context: Context) {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Anime4K 超分（移植自 4.0.0 的 mpv_anime4k_* 三项）
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Anime4K 总开关（默认**关闭**）。
+     *
+     * 4.0.0 里默认是关闭的（`getBoolean("mpv_anime4k_enabled", false)` 语义，
+     * 见 `yh.G()` 的取值路径），本移植保持关闭：CNN 着色器在中低端 GPU 上
+     * 跑 1080p 会明显掉帧，属于「用户主动开」的画质增强，不该默认背成本。
+     */
+    fun getMpvAnime4kEnabled(): Boolean = prefs.getBoolean(KEY_MPV_ANIME4K_ENABLED, false)
+
+    fun saveMpvAnime4kEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_MPV_ANIME4K_ENABLED, enabled).apply()
+    }
+
+    /** 质量档（High / Balanced / Fast），存枚举名，与 4.0.0 的 `name()` 落盘格式一致。 */
+    fun getMpvAnime4kQuality(): Anime4kQuality =
+        Anime4kQuality.fromName(prefs.getString(KEY_MPV_ANIME4K_QUALITY, null))
+
+    fun saveMpvAnime4kQuality(quality: Anime4kQuality) {
+        prefs.edit().putString(KEY_MPV_ANIME4K_QUALITY, quality.name).apply()
+    }
+
+    /** 修复档（A+/B+/C+/A/B/C），存枚举名。 */
+    fun getMpvAnime4kMode(): Anime4kMode =
+        Anime4kMode.fromName(prefs.getString(KEY_MPV_ANIME4K_MODE, null))
+
+    fun saveMpvAnime4kMode(mode: Anime4kMode) {
+        prefs.edit().putString(KEY_MPV_ANIME4K_MODE, mode.name).apply()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // 实时调色 LUT（移植自 MPV 实时 LUT 参考实现）
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -1423,6 +1458,11 @@ class AppSettingsRepository(context: Context) {
 
         /** mpv 解码档位（hw_plus / hw / sw）；见 [MpvHwdecMode]。 */
         const val KEY_MPV_HWDEC_MODE = "mpv_hwdec_mode"
+
+        /** Anime4K 超分三项，键名与 4.0.0 逐字对齐（`mpv_anime4k_*`）。 */
+        const val KEY_MPV_ANIME4K_ENABLED = "mpv_anime4k_enabled"
+        const val KEY_MPV_ANIME4K_QUALITY = "mpv_anime4k_quality"
+        const val KEY_MPV_ANIME4K_MODE = "mpv_anime4k_mode"
 
         /** 实时调色开关 / 尺寸 / 强度。7 个色彩参数的键在 [LutParamKey.prefKey] 里。 */
         const val KEY_LUT_ENABLED = "lut_enabled"

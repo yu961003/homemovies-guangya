@@ -1979,7 +1979,14 @@ class PlayerViewModel(
         )
         // 把当前调色设置传进 initialize：LUT 必须在 mpv_initialize() 之前以
         // --target-lut 下发，运行期再设不会重建渲染管线（详见 prepareInitialLut 的 KDoc）。
-        val initError = engine.initialize(initialLutSettings = currentLutSettings)
+        val initError = engine.initialize(
+            initialLutSettings = currentLutSettings,
+            // Anime4K 是 4.0.0 的画质能力，只在 mpv 内核上有（exo 侧没有对应的着色器管线）。
+            // 三项一起读：总开关关闭时 resolvePaths 直接返回 null，不会碰资产。
+            anime4kEnabled = settingsRepository.getMpvAnime4kEnabled(),
+            anime4kMode = settingsRepository.getMpvAnime4kMode(),
+            anime4kQuality = settingsRepository.getMpvAnime4kQuality(),
+        )
         if (initError != null) {
             engine.release()
             return initError
