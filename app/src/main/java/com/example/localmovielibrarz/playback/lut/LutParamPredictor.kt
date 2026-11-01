@@ -143,9 +143,13 @@ object LutParamPredictor {
         }
         trace?.add("[模板] ${selected.label}（temp=${template.temp}, bright=${template.bright}, shadow=${template.shadow}）")
 
-        val skin = features.skinRgb
+        // v2：把肤色像素压成「唯一颜色 + 出现次数」，统计量不变、评估量降一到两个数量级。
+        val compressed = compressSkin(features.skinRgb, features.weights)
+        val skin = compressed.rgb
+        val weights = compressed.weights
         val n = skin.size / 3
         val out = FloatArray(skin.size)
+        trace?.add("[压缩] 肤色像素 ${features.skinPixelCount} → 唯一颜色 $n")
 
         val origHl = features.fullHlRatio
         val origLum = features.skinLum
@@ -193,7 +197,7 @@ object LutParamPredictor {
                 val temp = tempBase + delta
                 p.temp = temp
                 applyToSkin(skin, p, out)
-                val d = LutSkinStats.sample(out)
+                val d = LutSkinStats.sampleWeighted(out, weights)
                 var err = sq(LutSkinStats.rangeError(d.skinRb, rbLo, rbHi))
                 err += 0.001 * (delta * delta)
                 if (err < bestErr) {
@@ -208,7 +212,7 @@ object LutParamPredictor {
             // 修正目标。修正项夹在 ±0.08 —— 这是「肤色提取可能偏了」的容差，
             // 不是让搜索去追一个不可达的目标（参考实现 703-740）。
             applyToSkin(skin, p, out)
-            val baseRb = LutSkinStats.sample(out).skinRb
+            val baseRb = LutSkinStats.sampleWeighted(out, weights).skinRb
             var rbOffset = origRb - baseRb
             rbOffset = max(-0.08, min(0.08, rbOffset))
             trace?.add("[色温] 基准修正 info_rb=${fmt3(origRb)}, base_rb=${fmt3(baseRb)}, offset=${fmt3(rbOffset)}")
@@ -227,7 +231,7 @@ object LutParamPredictor {
                 val temp = template.temp + delta
                 p.temp = temp
                 applyToSkin(skin, p, out)
-                val d = LutSkinStats.sample(out)
+                val d = LutSkinStats.sampleWeighted(out, weights)
                 val correctedRb = d.skinRb + rbOffset
                 // 目标带 ±0.03 容差：R/B 是像素比例，1% 的提取噪声就值 0.015，
                 // 不带容差会让搜索在两个相邻档位之间反复跳。
@@ -280,10 +284,10 @@ object LutParamPredictor {
         val targetLum = lumTarget
 
         // ── ③ 亮度搜索 ──────────────────────────────────────────────────────
-        p = searchBright(skin, out, p, template, targets, targetLum, lumHi, origLumIsBright, trace)
+        p = searchBright(skin, out, weights, p, template, targets, targetLum, lumHi, origLumIsBright, trace)
 
         // 复检：在 ±8 档内再搜一次（色温定下来后实际亮度可能已经偏了 10%）。
-        var postLum = evaluateLum(skin, out, p)
+        var postLum = evaluateLum(skin, out, p, weights)
         trace?.add("[亮度复检] 当前亮度=${fmt3(postLum)}，目标=${fmt3(targetLum)}")
         if (postLum < targetLum * 0.9 || postLum > targetLum * 1.1) {
             // 起搜点必须单独存：循环里 p.bright 会被逐档改写，拿它做「有没有变化」
@@ -301,7 +305,7 @@ object LutParamPredictor {
                 for (delta in lo2..hi2) {
                     val bright = template.bright + delta
                     p.bright = bright
-                    val d = sampleAfter(skin, p, out)
+                    val d = sampleAfter(skin, p, out, weights)
                     val curLum = d.skinLum
                     var err = when {
                         curLum < targetLum -> sq(targetLum - curLum)
@@ -319,7 +323,7 @@ object LutParamPredictor {
                 if (bestBright2 != baseBright) trace?.add("[亮度复检] $baseBright → $bestBright2")
                 p.bright = bestBright2
             }
-            postLum = evaluateLum(skin, out, p)
+            postLum = evaluateLum(skin, out, p, weights)
         }
 
         // ── ④ 色调（R/G 对准区间中心 ±5%） ─────────────────────────────────
@@ -332,7 +336,7 @@ object LutParamPredictor {
             for (delta in range.start..range.endInclusive) {
                 val tint = template.tint + delta
                 p.tint = tint
-                val d = sampleAfter(skin, p, out)
+                val d = sampleAfter(skin, p, out, weights)
                 var err = sq(LutSkinStats.rangeError(d.skinRg, lo, hi))
                 err += 0.001 * (delta * delta)
                 if (err < bestErr) {
@@ -354,7 +358,7 @@ object LutParamPredictor {
             for (delta in range.start..range.endInclusive) {
                 val sat = template.sat + delta
                 p.sat = sat
-                val d = sampleAfter(skin, p, out)
+                val d = sampleAfter(skin, p, out, weights)
                 var err = sq(LutSkinStats.rangeError(d.skinSat, lo, hi))
                 err += 0.001 * (delta * delta)
                 if (err < bestErr) {
@@ -374,7 +378,7 @@ object LutParamPredictor {
             for (delta in range.start..range.endInclusive) {
                 val contrast = template.contrast + delta
                 p.contrast = contrast
-                val d = sampleAfter(skin, p, out)
+                val d = sampleAfter(skin, p, out, weights)
                 var err = sq(LutSkinStats.rangeError(d.fullContrast, targets.fullContrastRange.start, targets.fullContrastRange.endInclusive))
                 err += 100 * sq(LutSkinStats.rangeError(d.skinRb, targets.skinRbRange.start, targets.skinRbRange.endInclusive))
                 err += 0.001 * (delta * delta)
@@ -407,7 +411,7 @@ object LutParamPredictor {
         run {
             val range = template.rangeOf(LutParamKey.Highlight)
             val hlBase = template.highlight + hlCompensation
-            val skinLumNow = evaluateLum(skin, out, p)
+            val skinLumNow = evaluateLum(skin, out, p, weights)
             val (hlLo, hlHi) = LutSkinStats.dynamicHlTarget(skinLumNow)
             trace?.add("[高光] 当前亮度=${fmt3(skinLumNow)}，动态目标=[${fmt3(hlLo)}, ${fmt3(hlHi)}]")
 
@@ -417,7 +421,7 @@ object LutParamPredictor {
             for (delta in range.start..range.endInclusive) {
                 val hl = hlBase + delta
                 p.highlight = hl
-                val d = sampleAfter(skin, p, out)
+                val d = sampleAfter(skin, p, out, weights)
                 // 豁免情形下不追求「高光占比落进区间」，只保 R/B 不跑偏。
                 var err = if (noHlExempt) 0.0 else sq(LutSkinStats.rangeError(d.fullHlRatio, hlLo, hlHi))
                 err += 10 * sq(LutSkinStats.rangeError(d.skinRb, targets.skinRbRange.start, targets.skinRbRange.endInclusive))
@@ -452,6 +456,8 @@ object LutParamPredictor {
 
             if (darkCount > 0) {
                 val darkVals = DoubleArray(darkCount)
+                val darkWeights = IntArray(darkCount) { k -> weights?.get(darkIdx[k]) ?: 1 }
+                val order = IntArray(darkCount)
                 for (delta in range.start..range.endInclusive) {
                     val sh = template.shadow + delta
                     p.shadow = sh
@@ -460,10 +466,9 @@ object LutParamPredictor {
                         val b0 = darkIdx[k] * 3
                         darkVals[k] = LutColorMath.luma(out[b0], out[b0 + 1], out[b0 + 2]).toDouble()
                     }
-                    darkVals.sort()
-                    val median = medianOfSorted(darkVals)
+                    val median = weightedMedian(darkVals, darkWeights, order)
                     var err = sq(median - DARK_LUM_TARGET)
-                    val d = LutSkinStats.sample(out)
+                    val d = LutSkinStats.sampleWeighted(out, weights)
                     err += sq(LutSkinStats.rangeError(d.skinRb, targets.skinRbRange.start, targets.skinRbRange.endInclusive))
                     if (err < bestErr) {
                         bestErr = err
@@ -474,13 +479,13 @@ object LutParamPredictor {
                 trace?.add("[阴影] 无暗部像素（亮度 < 0.20），保持模板值")
             }
             p.shadow = bestSh
-            trace?.add("[阴影] 暗部像素=$darkCount → shadow=$bestSh")
+            trace?.add("[阴影] 暗部颜色=$darkCount → shadow=$bestSh")
         }
 
         // ── ⑩ 最终亮度复检 ──────────────────────────────────────────────────
         // 前面几步（尤其阴影）会再次改变亮度。这里把「调整后不该比原片更暗」
         // 这条硬规则兜一次：区间内的原片被压暗、低于硬下限、超出上限，都重搜亮度。
-        val finalLum = evaluateLum(skin, out, p)
+        val finalLum = evaluateLum(skin, out, p, weights)
         val hardFloor = if (useExtreme) 0.0 else lumLo
         trace?.add("[最终复检] 原片=${fmt3(origLum)}, 调整后=${fmt3(finalLum)}, 区间=[${fmt3(lumLo)}, ${fmt3(lumHi)}], 硬下限=${fmt3(hardFloor)}")
 
@@ -532,7 +537,7 @@ object LutParamPredictor {
                 for (delta in lo3..hi3) {
                     val bright = template.bright + delta
                     p.bright = bright
-                    val d = sampleAfter(skin, p, out)
+                    val d = sampleAfter(skin, p, out, weights)
                     val curLum = d.skinLum
                     var err = when {
                         curLum < recheckTarget -> sq(recheckTarget - curLum)
@@ -678,7 +683,7 @@ object LutParamPredictor {
 
         // 缺亮补亮之后再看一眼高光：亮度被推高后高光占比会上升，需要重搜高光。
         if (!useExtreme && p.bright > template.bright && !noHlExempt) {
-            val postLum2 = evaluateLum(skin, out, p)
+            val postLum2 = evaluateLum(skin, out, p, weights)
             val (hlLo, hlHi) = LutSkinStats.dynamicHlTarget(postLum2)
             val range = template.rangeOf(LutParamKey.Highlight)
             val hlBase2 = template.highlight + hlCompensation
@@ -687,7 +692,7 @@ object LutParamPredictor {
             for (delta in range.start..range.endInclusive) {
                 val hl = hlBase2 + delta
                 p.highlight = hl
-                val d = sampleAfter(skin, p, out)
+                val d = sampleAfter(skin, p, out, weights)
                 val err = 100 * sq(LutSkinStats.rangeError(d.fullHlRatio, hlLo, hlHi))
                 if (err < bestErr2) {
                     bestErr2 = err
@@ -704,7 +709,7 @@ object LutParamPredictor {
         // 标准模板专用：高光占比还很低时逐档加亮，直到高光刚要出现（0.22）为止。
         if (!useExtreme && !useHighMatch) {
             applyToSkin(skin, p, out)
-            val currentHl = LutSkinStats.sample(out).fullHlRatio
+            val currentHl = LutSkinStats.sampleWeighted(out, weights).fullHlRatio
             if (p.bright < 18 && currentHl < 0.20) {
                 val brightLo = p.bright
                 val brightHi = min(18, template.bright + template.rangeOf(LutParamKey.Brightness).endInclusive)
@@ -712,7 +717,7 @@ object LutParamPredictor {
                 var bright = brightLo
                 while (bright <= brightHi) {
                     p.bright = bright
-                    val det = sampleAfter(skin, p, out)
+                    val det = sampleAfter(skin, p, out, weights)
                     if (det.fullHlRatio >= 0.22) {
                         // 越过阈值的那一档太亮，回退一格。
                         chosen = max(brightLo, bright - 1)
@@ -743,6 +748,7 @@ object LutParamPredictor {
     private fun searchBright(
         skin: FloatArray,
         out: FloatArray,
+        weights: IntArray?,
         p: P,
         template: LutTemplate,
         targets: LutTargets,
@@ -765,7 +771,7 @@ object LutParamPredictor {
         for (delta in range.start..range.endInclusive) {
             val bright = template.bright + delta
             p.bright = bright
-            val d = sampleAfter(skin, p, out)
+            val d = sampleAfter(skin, p, out, weights)
             val curLum = d.skinLum
             var err = when {
                 curLum < targetLum -> sq(targetLum - curLum)
@@ -873,160 +879,110 @@ object LutParamPredictor {
     /**
      * 对肤色像素应用一遍完整调色链，结果写进 [out]。
      *
-     * 与 [LutColorMath.applyAll] 的算子与系数完全相同，但有两处刻意的不同：
-     * 1. **过曝保护是无条件的**。`applyAll` 只压「原本没过曝、调完过曝」的格点
-     *    （LUT 生成必须这样，否则会压平片源本身的高光）；而参考实现分析肤色时用的
-     *    `_apply_params_to_skin`（mpv_realtime_lut.py:434-440）对所有超过 0.92 的
-     *    像素都压。分析的是「放进 LUT 之后的肤色」，必须跟分析函数一致。
-     * 2. **原地写缓冲**。搜索阶段要反复评估同一批像素上百次，每次分配 Triple 会让
-     *    ART 的 GC 在热循环里抖动。
+     * v2：算子来自共享的 [LutGradeKernel]（搜参模式），与最终渲染用的是同一份代码；
+     * v1 在这里手抄了一份算子与常量，两份只要有一处系数改漏，搜出来的参数就和画面对不上。
+     * 搜参模式与 LUT 生成的唯一差异是**过曝保护无条件生效**（参考实现
+     * `_apply_params_to_skin`，mpv_realtime_lut.py:434-440），由内核开关表达。
      */
     private fun applyToSkin(skin: FloatArray, p: P, out: FloatArray) {
-        System.arraycopy(skin, 0, out, 0, skin.size)
-        val n = skin.size / 3
+        val kernel = LutGradeKernel(p.toLutParams(), skinSearchMode = true)
+        var b0 = 0
+        val end = skin.size
+        while (b0 < end) {
+            kernel.apply(skin[b0], skin[b0 + 1], skin[b0 + 2], out, b0)
+            b0 += 3
+        }
+    }
 
-        if (p.bright != 0) {
-            for (i in 0 until n) applyBrightnessInPlace(out, i * 3, p.bright)
-        }
-        if (p.highlight != 0 || p.shadow != 0) {
-            for (i in 0 until n) applyHighlightShadowInPlace(out, i * 3, p.highlight, p.shadow)
-        }
-        if (p.contrast != 0) {
-            for (i in 0 until n) applyContrastInPlace(out, i * 3, p.contrast)
-        }
-        if (p.sat != 0) {
-            for (i in 0 until n) applySaturationInPlace(out, i * 3, p.sat)
-        }
-        if (p.temp != 0 || p.tint != 0) {
-            for (i in 0 until n) applyTempTintInPlace(out, i * 3, p.temp, p.tint)
-        }
+    /** 压缩后的肤色样本。 */
+    internal class CompressedSkin(val rgb: FloatArray, val weights: IntArray?)
 
-        // 无条件过曝保护 + clamp（与 _apply_params_to_skin 一致）。
+    /**
+     * 把肤色像素压成唯一颜色 + 出现次数。
+     *
+     * 只在像素确实是 8 bit 量化值（`k/255`）时压缩——这是分析器的产出形态，也是唯一能保证
+     * 「压缩前后统计量逐位一致」的前提。单测里手工构造的任意浮点像素不满足这个前提，
+     * 原样返回（权重为 null），行为与 v1 完全相同。
+     */
+    internal fun compressSkin(rgb: FloatArray, existingWeights: IntArray?): CompressedSkin {
+        if (existingWeights != null) return CompressedSkin(rgb, existingWeights)
+        val n = rgb.size / 3
+        if (n < COMPRESS_MIN_PIXELS) return CompressedSkin(rgb, null)
+        val keys = IntArray(n)
         for (i in 0 until n) {
             val b0 = i * 3
-            val lum = LutColorMath.luma(out[b0], out[b0 + 1], out[b0 + 2])
-            if (lum > OVEREXPOSE_LIMIT) {
-                val scale = OVEREXPOSE_LIMIT / max(lum, 1e-6f)
-                out[b0] *= scale
-                out[b0 + 1] *= scale
-                out[b0 + 2] *= scale
+            val r = quant8(rgb[b0]) ?: return CompressedSkin(rgb, null)
+            val g = quant8(rgb[b0 + 1]) ?: return CompressedSkin(rgb, null)
+            val b = quant8(rgb[b0 + 2]) ?: return CompressedSkin(rgb, null)
+            keys[i] = (r shl 16) or (g shl 8) or b
+        }
+        keys.sort()
+        var unique = 0
+        for (i in 0 until n) if (i == 0 || keys[i] != keys[i - 1]) unique++
+        if (unique * 2 > n) return CompressedSkin(rgb, null) // 压缩收益不足一半时不值得
+        val outRgb = FloatArray(unique * 3)
+        val outW = IntArray(unique)
+        var u = -1
+        for (i in 0 until n) {
+            if (i == 0 || keys[i] != keys[i - 1]) {
+                u++
+                val k = keys[i]
+                outRgb[u * 3] = (((k ushr 16) and 0xFF) / 255.0).toFloat()
+                outRgb[u * 3 + 1] = (((k ushr 8) and 0xFF) / 255.0).toFloat()
+                outRgb[u * 3 + 2] = ((k and 0xFF) / 255.0).toFloat()
             }
-            out[b0] = out[b0].coerceIn(0f, 1f)
-            out[b0 + 1] = out[b0 + 1].coerceIn(0f, 1f)
-            out[b0 + 2] = out[b0 + 2].coerceIn(0f, 1f)
+            outW[u]++
         }
+        return CompressedSkin(outRgb, outW)
     }
 
-    private fun applyBrightnessInPlace(s: FloatArray, b0: Int, bright: Int) {
-        val r = s[b0]
-        val g = s[b0 + 1]
-        val b = s[b0 + 2]
-        val lum = LutColorMath.luma(r, g, b)
-        val hlT = if (lum > HL_BRIGHT_DAMP_START) (lum - HL_BRIGHT_DAMP_START) / (1f - HL_BRIGHT_DAMP_START) else 0f
-        val hlDamp = max(HL_BRIGHT_DAMP_MIN, 1f - hlT * HL_BRIGHT_DAMP_STRENGTH)
-        val shDamp = if (lum < 0.18f) 0.35f + (1f - 0.35f) * (lum / 0.18f) else 1f
-        var scale = 1f + bright / 50f * 0.67f * hlDamp * shDamp
-        if (bright > 0) {
-            val protectW = ((lum - 0.85f) / (1f - 0.85f)).coerceIn(0f, 1f)
-            scale = scale * (1f - protectW) + protectW
-        }
-        s[b0] = r * scale
-        s[b0 + 1] = g * scale
-        s[b0 + 2] = b * scale
+    /** 浮点值若恰好是分析器产出的 `(k / 255.0).toFloat()`，返回 k；否则 null。 */
+    private fun quant8(v: Float): Int? {
+        val k = Math.round(v * 255f)
+        if (k < 0 || k > 255) return null
+        return if ((k / 255.0).toFloat() == v) k else null
     }
 
-    private fun applyHighlightShadowInPlace(s: FloatArray, b0: Int, highlight: Int, shadow: Int) {
-        val r = s[b0]
-        val g = s[b0 + 1]
-        val b = s[b0 + 2]
-        val lum = LutColorMath.luma(r, g, b)
-        var outR = r
-        var outG = g
-        var outB = b
-        if (highlight != 0) {
-            val w = if (lum > 0.5f) (lum - 0.5f) / 0.5f else 0f
-            val sc = 1f + highlight / 50f * 0.7f * w
-            outR *= sc; outG *= sc; outB *= sc
-        }
-        if (shadow != 0) {
-            val w = if (lum < 0.5f) (0.5f - lum) / 0.5f else 0f
-            val sc = 1f + shadow / 50f * 0.7f * w
-            outR *= sc; outG *= sc; outB *= sc
-        }
-        s[b0] = outR
-        s[b0 + 1] = outG
-        s[b0 + 2] = outB
+    /**
+     * 加权中位数，与「把每个值按权重展开后取中位数」严格等价
+     * （偶数个时取中间两个的均值，对齐 v1 的 `medianOfSorted`）。
+     */
+    private fun weightedMedian(values: DoubleArray, weights: IntArray, order: IntArray): Double {
+        val n = values.size
+        if (n == 0) return 0.0
+        for (i in 0 until n) order[i] = i
+        val sorted = order.sortedWith { a, b -> values[a].compareTo(values[b]) }
+        var total = 0L
+        for (w in weights) total += w
+        if (total == 0L) return 0.0
+        val loPos = (total - 1) / 2   // 0 基下标
+        val hiPos = total / 2
+        var acc = 0L
+        var lo = Double.NaN
+        var hi = Double.NaN
+        for (i in sorted) {
+            val next = acc + weights[i]
+            if (lo.isNaN() && loPos < next) lo = values[i]
+            if (hiPos < next) {
+                hi = values[i]
+                break
     }
-
-    private fun applyContrastInPlace(s: FloatArray, b0: Int, contrast: Int) {
-        val r = s[b0]
-        val g = s[b0 + 1]
-        val b = s[b0 + 2]
-        val lum = LutColorMath.luma(r, g, b)
-        val hlT = if (lum > HL_BRIGHT_DAMP_START) (lum - HL_BRIGHT_DAMP_START) / (1f - HL_BRIGHT_DAMP_START) else 0f
-        val hlDamp = max(HL_CONTRAST_DAMP_MIN, 1f - hlT * HL_CONTRAST_DAMP_STRENGTH)
-        val scale = 1f + contrast / 50f * 0.57f * hlDamp
-        s[b0] = 0.5f + scale * (r - 0.5f)
-        s[b0 + 1] = 0.5f + scale * (g - 0.5f)
-        s[b0 + 2] = 0.5f + scale * (b - 0.5f)
+            acc = next
     }
-
-    private fun applySaturationInPlace(s: FloatArray, b0: Int, sat: Int) {
-        val r = s[b0]
-        val g = s[b0 + 1]
-        val b = s[b0 + 2]
-        val gray = LutColorMath.luma(r, g, b)
-        val scale = 1f + sat / 50f * 0.82f
-        s[b0] = gray + scale * (r - gray)
-        s[b0 + 1] = gray + scale * (g - gray)
-        s[b0 + 2] = gray + scale * (b - gray)
-    }
-
-    private fun applyTempTintInPlace(s: FloatArray, b0: Int, temp: Int, tint: Int) {
-        val t = temp / 50f
-        val ti = tint / 50f
-        var rGain = 1f + t * 0.23f
-        var gGain = 1f + t * 0.058f
-        var bGain = 1f - t * 0.23f
-        rGain *= 1f + ti * 0.045f
-        gGain *= 1f - ti * 0.09f
-        bGain *= 1f + ti * 0.045f
-        val lumBefore = KR + KG + KB
-        val lumAfter = KR * rGain + KG * gGain + KB * bGain
-        if (lumAfter > 0.001f) {
-            val scale = lumBefore / lumAfter
-            rGain *= scale
-            gGain *= scale
-            bGain *= scale
-        }
-        val r = s[b0]
-        val g = s[b0 + 1]
-        val b = s[b0 + 2]
-        val lum = LutColorMath.luma(r, g, b)
-        val hlWeight = if (lum > TEMP_HL_START) ((lum - TEMP_HL_START) / (1f - TEMP_HL_START)).coerceIn(0f, 1f) else 0f
-        val hlDamp = 1f - hlWeight * TEMP_HL_PROTECT
-        s[b0] = r * (1f + (rGain - 1f) * hlDamp)
-        s[b0 + 1] = g * (1f + (gGain - 1f) * hlDamp)
-        s[b0 + 2] = b * (1f + (bGain - 1f) * hlDamp)
+        return if (total % 2L == 1L) lo else (lo + hi) / 2.0
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // 小工具
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun sampleAfter(skin: FloatArray, p: P, out: FloatArray): LutSkinFeatures {
+    private fun sampleAfter(skin: FloatArray, p: P, out: FloatArray, weights: IntArray?): LutSkinFeatures {
         applyToSkin(skin, p, out)
-        return LutSkinStats.sample(out)
+        return LutSkinStats.sampleWeighted(out, weights)
     }
 
-    private fun evaluateLum(skin: FloatArray, out: FloatArray, p: P): Double =
-        sampleAfter(skin, p, out).skinLum
-
-    private fun medianOfSorted(sorted: DoubleArray): Double {
-        val n = sorted.size
-        if (n == 0) return 0.0
-        return if (n % 2 == 1) sorted[n / 2] else (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
-    }
+    private fun evaluateLum(skin: FloatArray, out: FloatArray, p: P, weights: IntArray?): Double =
+        sampleAfter(skin, p, out, weights).skinLum
 
     private fun sq(v: Double): Double = v * v
 
@@ -1065,13 +1021,13 @@ object LutParamPredictor {
         fun copy(): P = P(temp, tint, sat, bright, contrast, highlight, shadow)
 
         fun toLutParams(): LutParams = LutParams(
-            temperature = temp,
-            tint = tint,
-            saturation = sat,
-            brightness = bright,
-            contrast = contrast,
-            highlight = highlight,
-            shadow = shadow
+            temperature = temp.coerceIn(LutParams.MIN, LutParams.MAX),
+            tint = tint.coerceIn(LutParams.MIN, LutParams.MAX),
+            saturation = sat.coerceIn(LutParams.MIN, LutParams.MAX),
+            brightness = bright.coerceIn(LutParams.MIN, LutParams.MAX),
+            contrast = contrast.coerceIn(LutParams.MIN, LutParams.MAX),
+            highlight = highlight.coerceIn(LutParams.MIN, LutParams.MAX),
+            shadow = shadow.coerceIn(LutParams.MIN, LutParams.MAX)
         )
 
         companion object {
@@ -1084,16 +1040,6 @@ object LutParamPredictor {
         }
     }
 
-    // 与 LutColorMath 同一组常量（参考实现 mpv_realtime_lut.py:118-120 / 234-246）。
-    private const val KR = 0.2126f
-    private const val KG = 0.7152f
-    private const val KB = 0.0722f
-    private const val OVEREXPOSE_LIMIT = 0.92f
-    private const val HL_BRIGHT_DAMP_START = 0.7f
-    private const val HL_BRIGHT_DAMP_STRENGTH = 0.7f
-    private const val HL_BRIGHT_DAMP_MIN = 0.3f
-    private const val HL_CONTRAST_DAMP_STRENGTH = 0.5f
-    private const val HL_CONTRAST_DAMP_MIN = 0.5f
-    private const val TEMP_HL_START = 0.70f
-    private const val TEMP_HL_PROTECT = 0.95f
+    /** 少于这么多像素时不压缩（压缩本身要排序，像素很少时不划算）。 */
+    private const val COMPRESS_MIN_PIXELS = 2048
 }

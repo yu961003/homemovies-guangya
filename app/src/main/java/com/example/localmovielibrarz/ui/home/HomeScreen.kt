@@ -102,11 +102,16 @@ import com.example.localmovielibrarz.ui.ContentAlphaMin
 
 private val MoviesBackground: Color
     @Composable get() = MaterialTheme.colorScheme.background
+
+/** v2：卡片/统计块统一用 MD3 容器色调（surfaceContainerHigh），不再用半透明 onSurface 叠色。 */
+private val MoviesPanel: Color
+    @Composable get() = MaterialTheme.colorScheme.surfaceContainerHigh
 private val MoviesSurface: Color
     @Composable get() = MaterialTheme.colorScheme.surface
-private val MoviesPanel: Color
-    @Composable get() = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.075f)
-private val MoviesAccent = Color(0xFF36C5F0)
+
+/** v2：强调色跟随主题主色（v1 写死品牌青 #36C5F0，换色板后会与其它控件不一致）。 */
+private val MoviesAccent: Color
+    @Composable get() = MaterialTheme.colorScheme.primary
 private const val ALL_MOVIES_INITIAL_COUNT = 90
 private const val ALL_MOVIES_PAGE_SIZE = 60
 private const val ALL_MOVIES_PREFETCH_THRESHOLD = 18
@@ -727,87 +732,45 @@ private fun UnscrapedMoviesTab(
     }
 }
 
+/**
+ * 首页顶部（v2 重设计）：大标题 + 扫描状态 + 库统计。
+ *
+ * v1 这里有一段 `if (false) { … }` 的死代码（海报/缩略切换与排序菜单），配套的
+ * `sortState = HomeSortState()`、空回调都是本地假状态——点了也不会生效。排序与图片模式
+ * 实际在「影片」页的 LibraryTopBar 里，这里一并删除，并把一直传进来却没显示的 [stats] 展示出来。
+ */
 @Composable
 fun MoviesTopBar(
     stats: LibraryStats,
     scanState: ScanState
 ) {
-    var sortExpanded by remember { mutableStateOf(false) }
-    var imageModeExpanded by remember { mutableStateOf(false) }
-    val imageMode = HomeImageMode.Poster
-    val sortState = HomeSortState()
-    val onImageModeSelected: (HomeImageMode) -> Unit = {}
-    val onSortSelected: (HomeSortOption) -> Unit = {}
-    val onToggleSortDirection: () -> Unit = {}
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surfaceVariant, MoviesBackground)))
+            .background(
+                Brush.verticalGradient(
+                    listOf(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f), MoviesBackground)
+                )
+            )
             .windowInsetsPadding(WindowInsets.statusBars)
-            .padding(start = 18.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
+        Column {
                 Text(
                     text = "\u9996\u9875",
                     color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.ExtraBold
+                style = MaterialTheme.typography.headlineMedium
                 )
                 Text(
                     text = scanMessage(scanState),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.56f),
-                    style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-
-            if (false) {
-            Box {
-                IconButton(onClick = { imageModeExpanded = true }) {
-                    Text(
-                        text = if (imageMode == HomeImageMode.Poster) "海报" else "缩略",
-                        color = MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                DropdownMenu(expanded = imageModeExpanded, onDismissRequest = { imageModeExpanded = false }) {
-                    DropdownMenuItem(
-                        text = { Text("使用 poster 显示") },
-                        onClick = {
-                            imageModeExpanded = false
-                            onImageModeSelected(HomeImageMode.Poster)
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("使用 thumb 显示") },
-                        onClick = {
-                            imageModeExpanded = false
-                            onImageModeSelected(HomeImageMode.Thumb)
-                        }
-                    )
-                }
-            }
-
-            Box {
-                IconButton(onClick = { sortExpanded = true }) {
-                    Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = "排序", tint = MaterialTheme.colorScheme.onSurface)
-                }
-                if (sortExpanded) {
-                    SortDialog(
-                        sortState = sortState,
-                        onDismiss = { sortExpanded = false },
-                        onSortSelected = onSortSelected,
-                        onToggleSortDirection = onToggleSortDirection
-                    )
-                }
-            }
-            }
-        }
+        if (stats.total > 0) LibraryStatsRow(stats)
     }
 }
 
@@ -924,13 +887,13 @@ private fun StatPill(label: String, value: String) {
         modifier = Modifier
             .clip(AppRadius.MD)
             .background(MoviesPanel)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         Text(
             text = value,
-            color = MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold
         )
         Text(
             text = label,
@@ -954,11 +917,11 @@ private fun LibraryEntryCard(
             .clip(AppRadius.XL)
             .background(
                 Brush.horizontalGradient(
-                    listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.surface)
+                    listOf(MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.surfaceContainerHigh)
                 )
             )
             .clickable(onClick = onClick)
-            .padding(18.dp),
+            .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1414,8 +1377,17 @@ private fun HomeSectionHeader(title: String, subtitle: String? = null) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 18.dp),
-        verticalAlignment = Alignment.Bottom
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        // v2：主色竖条强调分区起点（MD3 Expressive 的「形状即层级」）。
+        Box(
+            Modifier
+                .padding(end = 10.dp)
+                .width(4.dp)
+                .height(20.dp)
+                .clip(AppRadius.Full)
+                .background(MaterialTheme.colorScheme.primary)
+        )
         Text(
             text = title,
             color = MaterialTheme.colorScheme.onSurface,

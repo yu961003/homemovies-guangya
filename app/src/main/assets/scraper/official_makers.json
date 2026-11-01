@@ -9,10 +9,22 @@
       "homeUrl": "https://s1s1s1.com/",
       "detailUrlTemplate": "",
       "searchUrlTemplate": "",
-      "seriesPrefixes": ["ssis", "ssni", "snis", "sone", "soe"],
+      "seriesPrefixes": [
+        "sivr",
+        "ssis",
+        "ssni",
+        "snis",
+        "soe",
+        "oned",
+        "one",
+        "onsd",
+        "ofje",
+        "sps",
+        "tksoe"
+      ],
       "profile": "Generic",
       "releaseIsDeliveryDate": false,
-      "note": "S1 NO.1 STYLE 的站；模板待补（S1 系是 Next.js，注意它可能在 application/json 里给数据）"
+      "note": "S1 Studio 的站；模板待补（S1 系是 Next.js，注意它可能在 application/json 里给数据）"
     },
     {
       "id": "moodyz",
@@ -21,7 +33,52 @@
       "homeUrl": "https://moodyz.com/",
       "detailUrlTemplate": "",
       "searchUrlTemplate": "",
-      "seriesPrefixes": ["mide", "midv", "mimk", "mifd", "miaa", "miab"],
+      "seriesPrefixes": [
+        "mdvr",
+        "midv",
+        "mide",
+        "midd",
+        "mibd",
+        "mimk",
+        "miid",
+        "migd",
+        "mifd",
+        "miae",
+        "miad",
+        "miaa",
+        "mdl",
+        "mdj",
+        "mdi",
+        "mdg",
+        "mdf",
+        "mde",
+        "mdld",
+        "mded",
+        "mizd",
+        "mird",
+        "mdjd",
+        "rmid",
+        "mdid",
+        "mdmd",
+        "mimu",
+        "mdpd",
+        "mivd",
+        "mdud",
+        "mdgd",
+        "mdvd",
+        "mias",
+        "miqd",
+        "mint",
+        "rmpd",
+        "mdrd",
+        "tkmide",
+        "tkmidd",
+        "kmide",
+        "tkmigd",
+        "mdfd",
+        "rmwd",
+        "miab"
+      ],
       "profile": "Generic",
       "releaseIsDeliveryDate": false,
       "note": "MOODYZ 的站；模板待补"
@@ -33,7 +90,25 @@
       "homeUrl": "https://ideapocket.com/",
       "detailUrlTemplate": "",
       "searchUrlTemplate": "",
-      "seriesPrefixes": ["ipx", "ipzz", "ipz", "iptd", "ipit", "ipsd"],
+      "seriesPrefixes": [
+        "ipvr",
+        "ipx",
+        "ipz",
+        "iptd",
+        "ipsd",
+        "idbd",
+        "supd",
+        "ipit",
+        "and",
+        "hpd",
+        "tkipz",
+        "ipzz",
+        "cosd",
+        "anpd",
+        "dan",
+        "alad",
+        "kipx"
+      ],
       "profile": "Generic",
       "releaseIsDeliveryDate": false,
       "note": "IDEA POCKET 的站；模板待补"
@@ -45,7 +120,26 @@
       "homeUrl": "https://www.madonna-av.com/",
       "detailUrlTemplate": "",
       "searchUrlTemplate": "",
-      "seriesPrefixes": ["jul", "juq", "jux", "juy", "juk", "juc", "jusd", "juvr"],
+      "seriesPrefixes": [
+        "juvr",
+        "jusd",
+        "juq",
+        "juy",
+        "jux",
+        "jul",
+        "juk",
+        "juc",
+        "jukd",
+        "oba",
+        "jufd",
+        "roeb",
+        "roe",
+        "ure",
+        "mdon",
+        "jfb",
+        "obe",
+        "jums"
+      ],
       "profile": "Generic",
       "releaseIsDeliveryDate": false,
       "note": "Madonna 的站；模板待补（刻意不含 jufd / jfb：同一条前缀在 fitch-av.com 行也出现，歧义留给用户目录）"
@@ -57,7 +151,13 @@
       "homeUrl": "https://faleno.jp/",
       "detailUrlTemplate": "",
       "searchUrlTemplate": "",
-      "seriesPrefixes": ["fsdss", "fcdss", "fns", "mgold", "jimmy"],
+      "seriesPrefixes": [
+        "m9323",
+        "m9324",
+        "m9325",
+        "m9326",
+        "m9327"
+      ],
       "profile": "Generic",
       "releaseIsDeliveryDate": false,
       "note": "FALENO 的站（对非日本出口可能直接 403，靠浏览器回落）；模板待补"
@@ -69,7 +169,9 @@
       "homeUrl": "https://dahlia-av.jp/",
       "detailUrlTemplate": "",
       "searchUrlTemplate": "",
-      "seriesPrefixes": ["dldss"],
+      "seriesPrefixes": [
+        "m9328"
+      ],
       "profile": "Generic",
       "releaseIsDeliveryDate": false,
       "note": "DAHLIA 的站（WordPress，页面没有结构化段时走定义列表档）；模板待补"
@@ -81,7 +183,16 @@
       "homeUrl": "https://honnaka.jp/",
       "detailUrlTemplate": "",
       "searchUrlTemplate": "",
-      "seriesPrefixes": ["hnd", "hndb", "hmn", "hnvr"],
+      "seriesPrefixes": [
+        "hnvr",
+        "hmn",
+        "hndb",
+        "hnd",
+        "krnd",
+        "hnky",
+        "hnjc",
+        "hnse"
+      ],
       "profile": "Generic",
       "releaseIsDeliveryDate": false,
       "note": "本中（Honnaka）的站；模板待补"
@@ -93,7 +204,17 @@
       "homeUrl": "https://fitch-av.com/",
       "detailUrlTemplate": "",
       "searchUrlTemplate": "",
-      "seriesPrefixes": ["fcvr", "jufe", "juny", "nyb", "finh", "gcf", "nima"],
+      "seriesPrefixes": [
+        "fcvr",
+        "jufe",
+        "jufd",
+        "jfb",
+        "juny",
+        "nyb",
+        "finh",
+        "gcf",
+        "nima"
+      ],
       "profile": "Generic",
       "releaseIsDeliveryDate": false,
       "note": "Fitch 的站；模板待补（同样剔除 jufd / jfb，见 madonna 条目）"
@@ -105,7 +226,12 @@
       "homeUrl": "https://www.av-e-body.com/",
       "detailUrlTemplate": "",
       "searchUrlTemplate": "",
-      "seriesPrefixes": ["ebvr", "ebod", "eyan"],
+      "seriesPrefixes": [
+        "ebvr",
+        "ebod",
+        "mkck",
+        "eyan"
+      ],
       "profile": "Generic",
       "releaseIsDeliveryDate": false,
       "note": "E-BODY 的站；模板待补"
@@ -117,7 +243,15 @@
       "homeUrl": "https://kirakira-av.com/",
       "detailUrlTemplate": "",
       "searchUrlTemplate": "",
-      "seriesPrefixes": ["kivr", "blk", "kibd", "kifd", "kird", "kisd"],
+      "seriesPrefixes": [
+        "kivr",
+        "blk",
+        "kibd",
+        "kifd",
+        "kird",
+        "kisd",
+        "set"
+      ],
       "profile": "Generic",
       "releaseIsDeliveryDate": false,
       "note": "kira☆kira 的站；模板待补"
@@ -129,7 +263,20 @@
       "homeUrl": "https://attackers.net/",
       "detailUrlTemplate": "",
       "searchUrlTemplate": "",
-      "seriesPrefixes": ["atvr", "rbk", "rbd", "atid", "atkd", "shkd", "adn", "sspd", "azsd"],
+      "seriesPrefixes": [
+        "atvr",
+        "rbk",
+        "rbd",
+        "same",
+        "shkd",
+        "atid",
+        "adn",
+        "atkd",
+        "jbd",
+        "sspd",
+        "atad",
+        "azsd"
+      ],
       "profile": "Generic",
       "releaseIsDeliveryDate": false,
       "note": "ATTACKERS 的站；模板待补"
@@ -144,7 +291,7 @@
       "seriesPrefixes": [],
       "profile": "Generic",
       "releaseIsDeliveryDate": false,
-      "note": "MAX-A 的站：域名有据（web/integrations/jav-sites.json），前缀与模板都待补，补上前缀之前这家永远不会被 route 选中——这是有意的占位条目，不是遗漏"
+      "note": "MAX-A 的站：域名有据（web/integrations/video-sites.json），前缀与模板都待补，补上前缀之前这家永远不会被 route 选中——这是有意的占位条目，不是遗漏"
     }
   ]
 }

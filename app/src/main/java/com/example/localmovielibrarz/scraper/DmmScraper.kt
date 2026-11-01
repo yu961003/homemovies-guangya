@@ -51,17 +51,17 @@ class DmmScraper(
             .find(html)?.groupValues?.get(1)?.replace("ps.jpg", "pl.jpg").orEmpty()
         val poster = buildPosterUrl(thumb)
         val imageCandidates = buildDigitalImageCandidates(number, thumb, poster.ifBlank { thumb })
-        val tags = linksNearLabel(html, "ジャンル")
+        val tags = linksNearLabel(html, ProtocolLabels.GENRE)
         val actors = Regex("""<(?:span|td)[^>]+(?:id=["']performer["']|id=["']fn-visibleActor["'])[\s\S]*?</(?:span|td)>""", RegexOption.IGNORE_CASE)
             .find(html)?.value
             ?.let { linksIn(it) }
             .orEmpty()
-            .ifEmpty { linksNearLabel(html, "出演者") }
+            .ifEmpty { linksNearLabel(html, ProtocolLabels.ACTORS) }
 
-        val release = textNearLabel(html, "発売日")
-            .ifBlank { textNearLabel(html, "配信開始日") }
+        val release = textNearLabel(html, ProtocolLabels.RELEASE_DATE)
+            .ifBlank { textNearLabel(html, ProtocolLabels.DELIVERY_DATE) }
             .replace("/", "-")
-        val runtime = textNearLabel(html, "収録時間").digitsOnly()
+        val runtime = textNearLabel(html, ProtocolLabels.RUNTIME).digitsOnly()
 
         return ScrapedMovieInfo(
             number = number,
@@ -71,10 +71,10 @@ class DmmScraper(
             premiered = release,
             year = Regex("""\d{4}""").find(release)?.value.orEmpty(),
             runtime = runtime,
-            studio = linksNearLabel(html, "メーカー").firstOrNull().orEmpty(),
-            publisher = linksNearLabel(html, "レーベル").firstOrNull().orEmpty(),
-            series = linksNearLabel(html, "シリーズ").firstOrNull().orEmpty(),
-            directors = linksNearLabel(html, "監督"),
+            studio = linksNearLabel(html, ProtocolLabels.MAKER).firstOrNull().orEmpty(),
+            publisher = linksNearLabel(html, ProtocolLabels.LABEL).firstOrNull().orEmpty(),
+            series = linksNearLabel(html, ProtocolLabels.SERIES).firstOrNull().orEmpty(),
+            directors = linksNearLabel(html, ProtocolLabels.DIRECTOR),
             actors = actors,
             genres = tags,
             tags = tags,

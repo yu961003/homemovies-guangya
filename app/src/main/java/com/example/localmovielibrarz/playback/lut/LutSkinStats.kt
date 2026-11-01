@@ -29,6 +29,7 @@ import kotlin.math.min
  * @property regionName 肤色来自哪块区域，见 [LutSkinAnalyzer.REGION_CENTER]。
  * @property highPixelCount 亮度 > 0.70 的高光像素数（只统计，不参与判定）。
  * @property highRb 高光像素的 R/B 均值；高光像素不足 20 个时是 1.0。
+ * @property regionName 取值：`face_mesh`（人脸网格）/ `face_box`（人脸检测框）/ `center`（无人脸兜底）。
  */
 class LutSkinFeatures(
     val skinRgb: FloatArray,
@@ -41,17 +42,21 @@ class LutSkinFeatures(
     val fullShRatio: Double,
     val regionName: String = LutSkinAnalyzer.REGION_CENTER,
     val highPixelCount: Int = 0,
-    val highRb: Double = 1.0
+    val highRb: Double = 1.0,
+    /** 与 [skinRgb] 一一对应的出现次数；null 表示每个颜色就是一个像素。见 [LutSkinStats.sampleWeighted]。 */
+    val weights: IntArray? = null,
+    /** 参与分析的人脸数（0 = 没走人脸路径）。 */
+    val faceCount: Int = 0
 ) {
 
-    /** 参与统计的肤色像素个数。 */
-    val skinPixelCount: Int get() = skinRgb.size / 3
+    /** 参与统计的肤色像素个数（加权时是权重之和）。 */
+    val skinPixelCount: Int get() = weights?.let { w -> var t = 0; for (i in 0 until skinRgb.size / 3) t += w[i]; t } ?: (skinRgb.size / 3)
 
     /** 画面里有没有可用的肤色数据。 */
     val hasSkin: Boolean get() = skinRgb.isNotEmpty()
 
     override fun toString(): String = buildString {
-        append("LutSkinFeatures($regionName, n=").append(skinPixelCount)
+        append("LutSkinFeatures($regionName, faces=$faceCount, n=").append(skinPixelCount)
         append(", R/B=").append(fmt(skinRb))
         append(", R/G=").append(fmt(skinRg))
         append(", lum=").append(fmt(skinLum))
@@ -105,40 +110,72 @@ object LutSkinStats {
      *
      * @throws IllegalArgumentException 像素数组长度不是 3 的倍数。
      */
-    fun sample(skinRgb: FloatArray): LutSkinFeatures {
+    fun sample(skinRgb: FloatArray): LutSkinFeatures = sampleWeighted(skinRgb, null)
+
+    /**
+     * 加权版本：`skinRgb` 里第 i 个颜色代表 `weights[i]` 个像素（`weights == null` 时每个颜色权重为 1）。
+     *
+     * ## 为什么要加权（v2 性能）
+     *
+     * 肤色像素来自 8 bit 画面，一帧里 4~20 万个肤色像素通常只有几千种不同的 RGB。
+     * 自动分析要在同一批像素上评估上百组参数（每组都要跑完整调色链 + 两趟统计），
+     * 先把像素压成「唯一颜色 + 出现次数」再评估，计算量下降一到两个数量级，
+     * 而统计量**不变**：均值/计数类的和在 Double 里是精确的（8 bit 量化值的有限和不丢位），
+     * 加权与逐个累加得到同一个数。见 `LutParamPredictor.compressSkin`。
+     *
+     * 注意：返回值的 [LutSkinFeatures.skinRgb] 直接引用入参数组（不复制）。搜参热循环里
+     * 只读标量字段，复制会白白产生大量垃圾；需要长期持有像素时由调用方自行复制。
+     */
+    fun sampleWeighted(skinRgb: FloatArray, weights: IntArray?): LutSkinFeatures {
         require(skinRgb.size % 3 == 0) { "肤色像素数组长度必须是 3 的倍数：${skinRgb.size}" }
-        val n = skinRgb.size / 3
-        require(n > 0) { "没有肤色像素，无法统计" }
+        val colors = skinRgb.size / 3
+        require(colors > 0) { "没有肤色像素，无法统计" }
+        if (weights != null) {
+            require(weights.size >= colors) { "权重数组长度不足：${weights.size} < $colors" }
+        }
 
         var sr = 0.0
         var sg = 0.0
         var sb = 0.0
         var satSum = 0.0
-        var hlCount = 0
-        var shCount = 0
-        // 标准差要两趟：先求亮度均值，再求偏差平方和。
+        var hlCount = 0L
+        var shCount = 0L
         var lumSum = 0.0
+        var total = 0L
 
-        for (i in 0 until n) {
+        for (i in 0 until colors) {
+            val w = weights?.get(i) ?: 1
+            if (w <= 0) continue
+            val wd = w.toDouble()
             val base = i * 3
             val r = skinRgb[base]
             val g = skinRgb[base + 1]
             val b = skinRgb[base + 2]
+            total += w
+            if (w == 1) {
             sr += r
             sg += g
             sb += b
+            } else {
+                sr += r * wd
+                sg += g * wd
+                sb += b * wd
+            }
 
             val mx = max(r, max(g, b))
             val mn = min(r, min(g, b))
             // np.maximum(s_max, 1e-6)：纯黑像素不产生除零。
             val safeMax = max(mx, 1e-6f)
-            satSum += ((mx - mn) / safeMax)
+            val sat = ((mx - mn) / safeMax)
+            satSum += if (w == 1) sat.toDouble() else sat * wd
 
             val lum = pixelLuma(r, g, b)
-            lumSum += lum
-            if (lum > HL_THRESHOLD) hlCount++
-            if (lum < SH_THRESHOLD) shCount++
+            lumSum += if (w == 1) lum.toDouble() else lum * wd
+            if (lum > HL_THRESHOLD) hlCount += w
+            if (lum < SH_THRESHOLD) shCount += w
         }
+        require(total > 0) { "没有肤色像素，无法统计" }
+        val n = total.toDouble()
 
         // 一次舍入到 float32，再拓宽成 Double——对齐 `float(np.mean(...))`。
         val mR = (sr / n).toFloat().toDouble()
@@ -153,10 +190,13 @@ object LutSkinStats {
         // 第二趟：相对 float32 均值（numpy 的 np.std 也是相对同一个均值算偏差）。
         val meanLumF = (lumSum / n).toFloat()
         var devSq = 0.0
-        for (i in 0 until n) {
+        for (i in 0 until colors) {
+            val w = weights?.get(i) ?: 1
+            if (w <= 0) continue
             val base = i * 3
             val d = pixelLuma(skinRgb[base], skinRgb[base + 1], skinRgb[base + 2]) - meanLumF
-            devSq += (d * d).toDouble()
+            val dd = (d * d).toDouble()
+            devSq += if (w == 1) dd else dd * w
         }
         val contrast = kotlin.math.sqrt(devSq / n).toFloat().toDouble()
 
@@ -168,7 +208,8 @@ object LutSkinStats {
             skinSat = sat,
             fullContrast = contrast,
             fullHlRatio = hlCount.toDouble() / n,
-            fullShRatio = shCount.toDouble() / n
+            fullShRatio = shCount.toDouble() / n,
+            weights = weights
         )
     }
 

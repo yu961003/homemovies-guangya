@@ -39,7 +39,7 @@ class PeachSourceParserTest {
                       "image_url": "https://img.example.com/ssis-115-pl.jpg",
                       "date": "Tue Jan 02 2024 09:00:00 GMT+0900 (Japan Standard Time)",
                       "maker": {"name": "S1"},
-                      "label": {"name": "S1 NO.1 STYLE"},
+                      "label": {"name": "S1 Studio"},
                       "series": {"name": "系列名"},
                       "iteminfo": {"director": "监督名"}
                     }
@@ -61,7 +61,7 @@ class PeachSourceParserTest {
         assertEquals("2024-01-02", record.info.premiered)
         assertEquals("2024", record.info.year)
         assertEquals("S1", record.info.studio)
-        assertEquals("S1 NO.1 STYLE", record.info.publisher)
+        assertEquals("S1 Studio", record.info.publisher)
         assertEquals("系列名", record.info.series)
         assertEquals(listOf("监督名"), record.info.directors)
         assertEquals(listOf("演员甲", "演员乙"), record.info.actors)
@@ -93,7 +93,7 @@ class PeachSourceParserTest {
 
     // ---------------------------------------------------------------- 一本道
 
-    private fun onepondoJson(movieId: String) = """
+    private fun 1pondoJson(movieId: String) = """
         {
           "MovieID": "$movieId",
           "Title": "一本道作品",
@@ -101,15 +101,15 @@ class PeachSourceParserTest {
           "Release": "2024-01-02 00:00:00",
           "Series": "系列",
           "Duration": 2510,
-          "UCNAME": ["无码", "单体"],
-          "ActressesJa": ["女优甲"],
+          "UCNAME": ["无码", "单集"],
+          "${ProtocolLabels.ACTORS_JA_KEY}": ["演员甲"],
           "ThumbUltra": "https://img.example.com/1pon_ultra.jpg"
         }
     """.trimIndent()
 
     @Test
     fun onepondoParsesDetailJson() {
-        val result = OnePondoParser.parse(onepondoJson("010224_001"), "010224-001")
+        val result = OnePondoParser.parse(1pondoJson("010224_001"), "010224-001")
         assertTrue(result is PeachParseResult.Record)
         val info = (result as PeachParseResult.Record).info
         assertEquals("010224_001", info.number)
@@ -117,20 +117,20 @@ class PeachSourceParserTest {
         // 官网给秒，账本按分钟：2510 秒 = 41.83 分钟。
         assertEquals("41.83", info.runtime)
         assertEquals("2024-01-02", info.premiered)
-        assertEquals(listOf("女优甲"), info.actors)
+        assertEquals(listOf("演员甲"), info.actors)
         assertEquals("https://img.example.com/1pon_ultra.jpg", info.posterUrl)
     }
 
     @Test
     fun onepondoRejectsJsonFromAnotherRelease() {
         // 同一天发行的另一部片：MovieID 对不上就必须拒收，而不是把标题写进来。
-        val result = OnePondoParser.parse(onepondoJson("010224_002"), "010224-001")
+        val result = OnePondoParser.parse(1pondoJson("010224_002"), "010224-001")
         assertEquals(PeachFailureReason.NotFound, (result as PeachParseResult.Failed).reason)
     }
 
     @Test
     fun onepondoReportsNotFoundForNonDatedCode() {
-        val result = OnePondoParser.parse(onepondoJson("010224_001"), "SSIS-115")
+        val result = OnePondoParser.parse(1pondoJson("010224_001"), "SSIS-115")
         assertEquals(PeachFailureReason.NotFound, (result as PeachParseResult.Failed).reason)
     }
 
@@ -157,8 +157,8 @@ class PeachSourceParserTest {
         <div class="items_article_headerInfo">
           <a href="/users/12345/">卖家名</a>
         </div>
-        <p class="items_article_info">収録時間：41:50</p>
-        <span>販売日：2024/01/02</span>
+        <p class="items_article_info">${ProtocolLabels.RUNTIME}：41:50</p>
+        <span>${ProtocolLabels.SOLD_DATE}：2024/01/02</span>
         </body></html>
     """.trimIndent()
 
@@ -191,7 +191,7 @@ class PeachSourceParserTest {
     @Test
     fun fc2SoldOutPageIsNotFoundNotParseError() {
         // 下架商品回 200 但正文没有 Product 段：这是「站上没有」，不该触发整站冷却。
-        val page = "<html><body>見つかりませんでした</body></html>"
+        val page = "<html><body>not found</body></html>"
         val result = Fc2Parser.parse(page, "FC2-PPV-4137487")
         assertEquals(PeachFailureReason.NotFound, (result as PeachParseResult.Failed).reason)
     }

@@ -13,6 +13,7 @@ import com.example.localmovielibrarz.playback.engine.Anime4kMode
 import com.example.localmovielibrarz.playback.engine.Anime4kQuality
 import com.example.localmovielibrarz.playback.engine.MpvHwdecMode
 import com.example.localmovielibrarz.playback.lut.CubeLut
+import com.example.localmovielibrarz.playback.lut.LutCreativeParams
 import com.example.localmovielibrarz.playback.lut.LutParams
 import com.example.localmovielibrarz.playback.lut.LutSettings
 import com.example.localmovielibrarz.scraper.ScrapeProxyMode
@@ -991,11 +992,18 @@ class AppSettingsRepository(context: Context) {
         val strength = prefs.getInt(KEY_LUT_STRENGTH, LutSettings.DEFAULT_STRENGTH)
             .coerceIn(LutSettings.MIN_STRENGTH, LutSettings.MAX_STRENGTH)
         val params = LutParams.fromPrefMap { key -> prefs.getInt(key, 0) }
+        // v2：创意层与风格 LUT 叠加。缺键时得到中性值，与 v1 行为一致。
+        val creative = LutCreativeParams.fromPrefMap { key -> if (prefs.contains(key)) prefs.getInt(key, 0) else null }
+        val overlayPath = prefs.getString(KEY_LUT_OVERLAY_PATH, null)?.takeIf { it.isNotBlank() }
+        val overlayMix = prefs.getInt(KEY_LUT_OVERLAY_MIX, LutSettings.DEFAULT_OVERLAY_MIX).coerceIn(0, 100)
         return LutSettings(
             enabled = prefs.getBoolean(KEY_LUT_ENABLED, LutSettings.DEFAULT_ENABLED),
             lutSize = size,
             strengthPercent = strength,
-            params = params
+            params = params,
+            creative = creative,
+            overlayLutPath = overlayPath,
+            overlayMixPercent = overlayMix
         )
     }
 
@@ -1006,6 +1014,10 @@ class AppSettingsRepository(context: Context) {
             putInt(KEY_LUT_SIZE, settings.lutSize)
             putInt(KEY_LUT_STRENGTH, settings.strengthPercent)
             settings.params.toPrefMap().forEach { (key, value) -> putInt(key, value) }
+            settings.creative.toPrefMap().forEach { (key, value) -> putInt(key, value) }
+            if (settings.overlayLutPath.isNullOrBlank()) remove(KEY_LUT_OVERLAY_PATH)
+            else putString(KEY_LUT_OVERLAY_PATH, settings.overlayLutPath)
+            putInt(KEY_LUT_OVERLAY_MIX, settings.overlayMixPercent)
         }.apply()
     }
 
@@ -1469,6 +1481,10 @@ class AppSettingsRepository(context: Context) {
         const val KEY_LUT_SIZE = "lut_size"
         const val KEY_LUT_STRENGTH = "lut_strength"
 
+        /** v2：风格 LUT 叠加（路径为应用私有目录内、以内容哈希命名的副本）。仍以 `lut_` 开头，见 observeLutSettings。 */
+        const val KEY_LUT_OVERLAY_PATH = "lut_overlay_path"
+        const val KEY_LUT_OVERLAY_MIX = "lut_overlay_mix"
+
         /**
          * 影片卡片右下角的 TOP 榜金标总开关。
          *
@@ -1560,9 +1576,9 @@ class AppSettingsRepository(context: Context) {
             // 桃链新接入的三家。必须进选项而不是只活在链内部：用户要能点名它们
             // （详情页「用这家重刮」），否则等于接了个看不见的源。
             //
-            // 只进选项、不进 DEFAULT_PRIORITY_SCRAPE_SOURCES：有码链的 peach ROUTES 会先问
+            // 只进选项、不进 DEFAULT_PRIORITY_SCRAPE_SOURCES：有修正链的 peach ROUTES 会先问
             // prestige/faleno/dahlia/makers（本工程前三家未接），再轮到 avbase——把它塞进默认链，
-            // 等于给每个有码番号多打一次站。无码/FC2 番号才有必要问 1pondo/fc2，
+            // 等于给每个有修正番号多打一次站。无码/FC2 番号才有必要问 1pondo/fc2，
             // 而这两类番号本来就不会在默认链的三家（Dmm2/TheJavDB/Javbus）拿到结果，
             // 用户遇到时自己勾上即可；默认开启会让既有用户凭空多出陌生站点的请求。
             ScrapeSource.Avbase,

@@ -104,6 +104,12 @@ class AppContainer(context: Context) {
         db.execSQL(SQL_STRM_RECORDS_MOVIE_NUMBER_NOCASE_INDEX)
     }
     val settingsRepository = AppSettingsRepository(appContext)
+
+    /** v2：外观（明暗 / 色板 / 动态取色 / AMOLED）。与 settingsRepository 共用同一个 prefs 文件。 */
+    val themeSettings = com.example.localmovielibrarz.data.repository.ThemeSettingsRepository(appContext)
+
+    /** v2：播放器增强（HDR 管线 / 去色带 / 手势 / 刷新率匹配等，从 mpvRx 能力清单接入）。 */
+    val playerFeatureSettings = com.example.localmovielibrarz.data.repository.PlayerFeatureSettings(appContext)
     val usageStatsRepository = UsageStatsRepository(appContext)
     val appUpdateRepository = AppUpdateRepository(appContext, settingsRepository)
     // 2.2 优化：非核心路径（115 网盘 / 光鸭云盘）改为懒加载，

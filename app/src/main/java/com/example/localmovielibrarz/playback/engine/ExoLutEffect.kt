@@ -1,6 +1,8 @@
 package com.example.localmovielibrarz.playback.engine
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.ColorLut
 import androidx.media3.effect.GlEffect
@@ -9,26 +11,20 @@ import androidx.media3.effect.PassthroughShaderProgram
 import androidx.media3.effect.SingleColorLut
 import com.example.localmovielibrarz.playback.lut.CubeLut
 import com.example.localmovielibrarz.playback.lut.LutSettings
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * exo 内核的 3D LUT 着色（§5.2-6）。
  *
- * ## 为什么要补这一层
- *
- * mpv 侧的下发通道是 `--target-lut <文件>`（见 `MpvPlaybackEngine`：必须 `vo=gpu-next`
- * 且在 `mpv_initialize()` 之前写入）。exo 侧原本文档里写的是「没有对应的色彩管线」。
- * media3 1.9.1 的 `media3-effect` 恰好把缺口补上了：`SingleColorLut` + 内置
- * `fragment_shader_lut_es2.glsl` 就是与 mpv `target-lut` 同语义的 3D LUT 采样
- * （三线性插值、红色索引变化最快）。
- *
- * 所以这里**不重写着色器**——重写一遍只会多一份与 mpv 侧不一致的取样实现。这一层只做
- * 三件事：把 [CubeLut] 转成 media3 要的三维 `int` 立方、包一层 [GlEffect]、在 HDR 时降级。
+ * media3 1.9.1 的 `SingleColorLut` + 内置 `fragment_shader_lut_es2.glsl` 就是与 mpv `target-lut`
+ * 同语义的 3D LUT 采样。这里**不重写着色器**，只做三件事：把 [CubeLut] 转成 media3 要的三维
+ * `int` 立方、包一层 [GlEffect]、在 HDR 时降级。
  *
  * ## 尺寸与内存
  *
- * media3 把 3D LUT 摊平成 `N × N²` 的 **ARGB_8888 位图**再上传成纹理。33³ 的位图是
- * 33×1089 ≈ 143KB，65³ 是 65×4225 ≈ 1.1MB。相对一帧 1080p 纹理可以忽略，但**每次
- * 参数变动都会重建一次**，所以调用方必须按 `LutSettings.signature()` 去重。
+ * media3 把 3D LUT 摊平成 `N × N²` 的 ARGB_8888 位图再上传成纹理。33³ ≈ 143KB，65³ ≈ 1.1MB。
  */
 @UnstableApi
 object ExoLutEffect {
@@ -36,30 +32,20 @@ object ExoLutEffect {
     /**
      * 把 [lut] 转成 media3 的 [ColorLut]。
      *
-     * ## 索引方向为什么是 `cube[red][green][blue]`
-     *
-     * media3 的 `SingleColorLut.transformCubeIntoBitmap(int[][][])` 把下表写进位图：
-     * ```
-     * pixels[x + n * (y + n * z)] = cube[z][y][x]
-     * ```
-     * 而 `fragment_shader_lut_es2.glsl` 采样的行号是 `N * red + green`、列号是 `blue`。
-     * 位图行号 `row = y + n*z`，代入即 `row = N*red + green`，所以
-     * **z 轴是红、y 轴是绿、x 轴是蓝**，也就是 `cube[red][green][blue]`。
-     * 写反这一维不会报错，只会让画面偏色——这是这类代码最典型的错法。
-     *
-     * 每个 `int` 必须是 **ARGB_8888 打包值**（`createFromCube` 直接把它当像素写）：
-     * 高 8 位 alpha 必须是不透明的 0xFF，否则位图半透明，采样回来的 rgb 会不对。
+     * 索引方向是 `cube[red][green][blue]`（推导见 v1 注释：位图行号 `N*red + green`、列号 `blue`）。
+     * v2 直接按 [CubeLut.values] 的展平偏移读取，不再经过 `at()` 的 `Triple` 装箱；
+     * 量化改为四舍五入（v1 是截断，整体会偏暗约半个 8 bit 色阶）。
      */
     fun createColorLut(lut: CubeLut): ColorLut {
         val size = lut.size
+        val values = lut.values
         val cube = Array(size) { Array(size) { IntArray(size) } }
+        var i = 0
         for (b in 0 until size) {
             for (g in 0 until size) {
                 for (r in 0 until size) {
-                    // CubeLut.at() 的偏移是 ((b*size + g)*size + r)*3，红色索引变化最快，
-                    // 与 .cube 规范一致；这里只做维度搬运，不做任何采样或重排。
-                    val (rf, gf, bf) = lut.at(r, g, b)
-                    cube[r][g][b] = packArgb(rf, gf, bf)
+                    cube[r][g][b] = packArgb(values[i], values[i + 1], values[i + 2])
+                    i += 3
                 }
             }
         }
@@ -67,17 +53,8 @@ object ExoLutEffect {
     }
 
     /**
-     * 包成 [GlEffect]。
-     *
-     * 这一层唯一的作用是**截住 HDR 分支**：`SingleColorLut.toGlShaderProgram(context, true)`
-     * 内部是 `checkState(!useHdr, "HDR is currently not supported.")`，也就是 HDR 片源一旦
-     * 走到 LUT 就会抛 [IllegalStateException] 并**中断整条视频渲染管线**（不是降级，是
-     * 报错/黑屏）。用户开一次调色再看一部 HDR 片就崩，代价太大。
-     *
-     * 所以 HDR 时返回 [PassthroughShaderProgram]（原样透传）而不是让异常冒出去：
-     * 画面保持片源原色，调色在 HDR 片源上静默不生效。这是**有意的功能降级**，不是遗漏——
-     * 支持 HDR LUT 需要先做 HDR→SDR 色调映射，那是另一个量级的工程（§5.3 也已把
-     * 「按 5.0.5 规格重做 LUT」列为不建议项）。
+     * 包成 [GlEffect]，截住 HDR 分支：`SingleColorLut` 在 `useHdr=true` 时 `checkState` 抛异常
+     * 会中断整条渲染管线（黑屏），所以 HDR 时原样透传。这是有意的功能降级。
      */
     fun wrap(colorLut: ColorLut): GlEffect = HdrSafeColorLutEffect(colorLut)
 
@@ -90,11 +67,11 @@ object ExoLutEffect {
             }
     }
 
-    /** `0f..1f` 的线性 rgb → ARGB_8888 打包值。 */
+    /** `0f..1f` 的 rgb → ARGB_8888 打包值（四舍五入）。 */
     private fun packArgb(r: Float, g: Float, b: Float): Int {
-        val ri = (r.coerceIn(0f, 1f) * 255f).toInt()
-        val gi = (g.coerceIn(0f, 1f) * 255f).toInt()
-        val bi = (b.coerceIn(0f, 1f) * 255f).toInt()
+        val ri = (r.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+        val gi = (g.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+        val bi = (b.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
         return (0xFF shl 24) or (ri shl 16) or (gi shl 8) or bi
     }
 }
@@ -102,18 +79,21 @@ object ExoLutEffect {
 /**
  * exo 侧 LUT 下发的状态机。
  *
- * 单独拎出来而不是塞进 `PlayerViewModel` 的原因：这段逻辑要按 `LutSettings.signature()`
- * 去重、要在关闭时清空效果、要吞掉所有异常（LUT 出错绝不能影响播放），是可被单测覆盖的
- * 纯逻辑；而 ViewModel 里那段代码跑在 Android 主线程、依赖 ExoPlayer 实例，测不了。
+ * ## v2 变化：生成移出主线程
  *
- * ## 为什么下发回调是每次传入，而不是构造时绑定
+ * v1 在调用线程（主线程）同步生成 LUT：33³ 尚可，65³ 或带创意层/风格 LUT 时会让 UI 卡一帧以上，
+ * 滑杆拖动时尤其明显。v2：
+ * 1. 生成放到单线程执行器（与 mpv 侧 `lutExecutor` 同一思路），数据来自 [LutSettings.buildLut]
+ *    的进程级缓存——mpv 刚生成过的同一组设置这里直接命中；
+ * 2. 用「代次」防止旧结果晚到覆盖新结果（v1 正是为了回避这个竞态才坚持同步生成的）：
+ *    每次请求递增代次，生成完成回到主线程时只接受最新一代；
+ * 3. [applyEffects] 仍在主线程调用（`ExoPlayer.setVideoEffects` 要求在播放器线程）。
  *
- * exo 播放器实例会因内核切换、解码失败重试而被重建。若构造时就把
- * `exoPlayer::setVideoEffects` 绑死，重建后仍在往旧实例下发效果——表现为「静默无效」，
- * 日志里也看不出来（`setVideoEffects` 不校验播放器状态）。每次调用传入回调则天然跟随
- * 当前实例。
+ * ## 为什么下发回调是每次传入
  *
- * @param onError 出错回调。默认空实现——LUT 失败**绝不能**影响播放，这是硬约束。
+ * exo 播放器实例会因内核切换、解码失败重试而被重建；每次调用传入回调天然跟随当前实例。
+ *
+ * @param onError 出错回调。LUT 失败**绝不能**影响播放，这是硬约束。
  */
 @UnstableApi
 class ExoLutApplier(
@@ -123,43 +103,62 @@ class ExoLutApplier(
     @Volatile
     private var lastSignature: String? = null
 
+    private val generation = AtomicInteger(0)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val executor: ExecutorService = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "exo-lut").apply { isDaemon = true }
+    }
+
     /**
      * 按需下发 [settings]，[applyEffects] 是真正调用 `ExoPlayer.setVideoEffects` 的回调。
-     *
-     * 去重键是 `signature()`（覆盖 lutSize / strength / 7 个参数）。注意签名**不含**
-     * `enabled`：开关由「下发空列表」表达，与 mpv 侧「下发空路径」同语义（见
-     * `LutSettings.effectiveFileName`）。所以关闭时签名要记成空串而不是保留旧值，
-     * 否则「关掉再打开同一组参数」会命中缓存、不再下发。
+     * 必须在主线程调用。
      */
     fun apply(settings: LutSettings, applyEffects: (List<GlEffect>) -> Unit) {
         val signature = if (settings.shouldApply) settings.signature() else ""
         if (signature == lastSignature) return
         lastSignature = signature
+        val token = generation.incrementAndGet()
         if (signature.isEmpty()) {
             runCatching { applyEffects(emptyList()) }.onFailure(onError)
             return
         }
-        // LUT 生成是纯 CPU、33³ 约 20ms。这里同步做（而不是丢到别的线程）有两个理由：
-        // 1) 调用点在主线程，滑杆停止后才会触发，20ms 不构成可感知卡顿，
-        //    与 mpv 侧 LutFileWriter.materialize 的同步生成代价一致；
-        // 2) 异步下发会引入「旧 LUT 晚到、覆盖新 LUT」的竞态——签名去重就失效了。
-        // 真正需要异步的是自动分析（几百次参数搜索），那条路径单独走 Dispatchers.Default。
+        val submitted = runCatching {
+            executor.execute {
         val effects = runCatching {
             listOf(ExoLutEffect.wrap(ExoLutEffect.createColorLut(settings.buildLut())))
-        }.getOrElse { error ->
+                }
+                mainHandler.post {
+                    if (token != generation.get()) return@post // 已被更新的请求覆盖
+                    effects
+                        .onSuccess { list ->
+                            runCatching { applyEffects(list) }.onFailure { error ->
+                                lastSignature = null
+                                onError(error)
+                            }
+                        }
+                        .onFailure { error ->
             // 生成失败就把签名清掉，允许下一次重试（否则一次 OOM 会永久禁用调色）。
             lastSignature = null
             onError(error)
-            return
         }
-        runCatching { applyEffects(effects) }.onFailure { error ->
+                }
+            }
+        }
+        if (submitted.isFailure) {
             lastSignature = null
-            onError(error)
+            submitted.exceptionOrNull()?.let(onError)
         }
     }
 
     /** 播放器被重建时调用：丢弃签名，让新实例能重新收到效果。 */
     fun reset() {
         lastSignature = null
+        generation.incrementAndGet()
+    }
+
+    /** 释放后台线程（ViewModel 销毁时调用）。 */
+    fun release() {
+        generation.incrementAndGet()
+        executor.shutdownNow()
     }
 }

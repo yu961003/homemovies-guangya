@@ -204,9 +204,13 @@ class MpvPlaybackEngine(
         anime4kEnabled: Boolean = false,
         anime4kMode: Anime4kMode = Anime4kMode.DEFAULT,
         anime4kQuality: Anime4kQuality = Anime4kQuality.DEFAULT,
+        enhancements: MpvEnhancementOptions = MpvEnhancementOptions.DEFAULT,
     ): String? {
         if (released) return "mpv 引擎已释放"
         if (created) return null
+        this.enhancements = enhancements
+        this.anime4kMode = anime4kMode
+        this.anime4kQuality = anime4kQuality
 
         cacheDir.mkdirs()
 
@@ -244,8 +248,30 @@ class MpvPlaybackEngine(
             )
         }
 
+        // v2：HDR 色调映射管线（参考 mpvRx 的 hdr-toys 能力）。非 OFF 时先把着色器解包到 filesDir；
+        // 解包失败就降级为 OFF（画质增强绝不挡住播放）。
+        val hdrDir = if (enhancements.hdrMode != HdrToneMode.OFF && enhancements.hdrMode != HdrToneMode.LINEAR) {
+            MpvHdrShaders.ensure(context)?.absolutePath
+        } else {
+            null
+        }
+        hdrShaderDir = hdrDir
+        val effectiveHdrMode = if (hdrDir == null && enhancements.hdrMode != HdrToneMode.LINEAR) {
+            if (enhancements.hdrMode != HdrToneMode.OFF) Log.w(TAG, "hdr-toys 着色器不可用：HDR 管线降级为关闭")
+            HdrToneMode.OFF
+        } else {
+            enhancements.hdrMode
+        }
+        // 强制 HDR 模式（PQ/HLG/BT.2020/直出）下 target-lut 会作用在错误的色彩空间：本次暂停调色。
+        val forcedHdr = HdrToysChain.forMode(effectiveHdrMode) != null || effectiveHdrMode == HdrToneMode.LINEAR
+        if (forcedHdr) {
+            activeHdrChain = HdrToysChain.forMode(effectiveHdrMode)
+            lutSuspendedForHdr = true
+            suspendedLutSettings = initialLutSettings
+        }
+
         // 调色（LUT）要在 init 之前就变成 --target-lut，理由见 prepareInitialLut()。
-        val initialLutPath = prepareInitialLut(initialLutSettings)
+        val initialLutPath = if (forcedHdr) null else prepareInitialLut(initialLutSettings)
 
         // Anime4K 同理：glsl-shaders 必须在 mpv_initialize() 之前下发，见 [MpvAnime4k]。
         // 任何一步失败都返回 null（本次以无超分起播），不让画质增强挡住播放。
@@ -262,7 +288,10 @@ class MpvPlaybackEngine(
         }
 
         // 所有 --option 必须在 mpv_initialize() 之前设置，否则被静默忽略。
-        MpvOptions.build(context, hwdec, cacheDir, caFilePath, initialLutPath, anime4kShaders)
+        anime4kShaderPaths = anime4kShaders?.split(':')?.filter { it.isNotBlank() }.orEmpty()
+        hdrShaderPaths = activeHdrChain?.let { chain -> hdrDir?.let { MpvHdrShaders.paths(it, chain) } }.orEmpty()
+        val sessionEnhancements = enhancements.copy(hdrMode = effectiveHdrMode, hdrShaderDir = hdrDir)
+        MpvOptions.build(context, hwdec, cacheDir, caFilePath, initialLutPath, anime4kShaders, sessionEnhancements)
             .forEach { (key, value) ->
                 val ret = MPVLib.setOption(key, value)
                 if (ret < 0) Log.w(TAG, "设置 mpv 选项 $key=$value 失败: $ret")
@@ -320,6 +349,7 @@ class MpvPlaybackEngine(
     override fun release() {
         if (released) return
         released = true
+        mainHandler.removeCallbacks(thermalPoll)
         // 先停 LUT 线程：它跑完最后一步时还会 post 回主线程，那里有 released 检查兜底。
         lutExecutor.shutdownNow()
         ioExecutor.shutdownNow()
@@ -773,6 +803,11 @@ class MpvPlaybackEngine(
      */
     fun applyLut(settings: LutSettings) {
         if (released) return
+        if (lutSuspendedForHdr) {
+            // HDR 管线生效期间只记住最新设置，恢复 SDR 时再下发（见 resumeLutAfterHdr）。
+            suspendedLutSettings = settings
+            return
+        }
         val signature = if (settings.shouldApply) settings.signature() else DISABLED_LUT_SIGNATURE
         if (signature == lastLutSignature) return
         // 先于入队登记：队列里的旧任务靠它判断自己是否已被更新的请求覆盖（见 [pendingLutSignature]）。
@@ -870,6 +905,282 @@ class MpvPlaybackEngine(
     fun currentLutSignature(): String? = lastLutSignature
 
     // ─────────────────────────────────────────────────────────────────────────
+    // v2 增强：HDR 管线 / Anime4K 守卫 / 热管理（参考 mpvRx 能力，独立实现）
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private var enhancements: MpvEnhancementOptions = MpvEnhancementOptions.DEFAULT
+    private var anime4kMode: Anime4kMode = Anime4kMode.DEFAULT
+    private var anime4kQuality: Anime4kQuality = Anime4kQuality.DEFAULT
+    private var hdrShaderDir: String? = null
+
+    /** 当前 glsl-shaders 里属于 Anime4K 的部分（运行期降档/关闭时整体替换）。 */
+    private var anime4kShaderPaths: List<String> = emptyList()
+
+    /** 当前 glsl-shaders 里属于 hdr-toys 的部分。 */
+    private var hdrShaderPaths: List<String> = emptyList()
+
+    @Volatile
+    private var activeHdrChain: HdrToysChain? = null
+
+    /** HDR 管线生效期间调色暂停；恢复 SDR 时用最新设置重新下发。 */
+    @Volatile
+    private var lutSuspendedForHdr = false
+
+    @Volatile
+    private var suspendedLutSettings: LutSettings? = null
+
+    /**
+     * 增强功能的状态提示（HDR 管线启用 / 调色暂停 / Anime4K 降档等），由 UI 以横幅展示。
+     * 与 [lutFailureReporter] 分开：这些是「有意的行为」，不是失败。
+     */
+    var enhancementNoticeReporter: ((String) -> Unit)? = null
+
+    /** 片源信息（宽、高、帧率），供刷新率匹配与统计浮层使用。 */
+    var videoInfoReporter: ((width: Int, height: Int, fps: Double) -> Unit)? = null
+
+    /** 当前是否处于 HDR 管线（UI 状态展示用）。 */
+    val hdrChainActive: HdrToysChain? get() = activeHdrChain
+
+    private fun onFileLoadedEnhancements() {
+        if (released || !created) return
+        val width = MPVLib.getInt("width") ?: 0
+        val height = MPVLib.getInt("height") ?: 0
+        val fps = MPVLib.getDouble("container-fps") ?: MPVLib.getDouble("estimated-vf-fps") ?: 0.0
+        videoInfoReporter?.invoke(width, height, fps)
+
+        if (enhancements.hdrMode == HdrToneMode.AUTO) applyAutoHdrPipeline()
+
+        // 4K/8K 守卫：Anime4K 的 x2 放大在高分辨率片源上必然掉帧，直接摘掉。
+        if (!enhancements.anime4kGuards) return
+        if (anime4kShaderPaths.isNotEmpty() && !ThermalGuard.anime4kAllowedFor(width, height)) {
+            anime4kShaderPaths = emptyList()
+            if (applyShaderList()) {
+                enhancementNoticeReporter?.invoke("片源为 ${width}×$height，已自动停用 Anime4K（高分辨率下必然掉帧）")
+            }
+        }
+        if (anime4kShaderPaths.isNotEmpty()) {
+            mainHandler.removeCallbacks(thermalPoll)
+            mainHandler.postDelayed(thermalPoll, ThermalGuard.SAMPLE_INTERVAL_MS)
+        }
+    }
+
+    /**
+     * AUTO 模式：按 `video-params` 决定是否启用 hdr-toys 链。整组属性一起下发（见 [HdrPipelineProperties]），
+     * 与切换历史无关。SDR 片源恢复 mpv 默认值并恢复调色。
+     */
+    private fun applyAutoHdrPipeline() {
+        val dir = hdrShaderDir ?: return
+        val gamma = MPVLib.getString("video-params/gamma").orEmpty()
+        val primaries = MPVLib.getString("video-params/primaries").orEmpty()
+        val chain = HdrToysChain.forSource(gamma, primaries)
+        if (chain == activeHdrChain) return
+        val props = if (chain != null) HdrPipelineProperties.forChain(chain) else HdrPipelineProperties.off()
+        props.forEach { (k, v) -> setStringChecked(k, v) }
+        hdrShaderPaths = chain?.let { MpvHdrShaders.paths(dir, it) }.orEmpty()
+        activeHdrChain = chain
+        applyShaderList()
+        if (chain != null) {
+            suspendLutForHdr()
+            enhancementNoticeReporter?.invoke("检测到 ${chain.name} 片源：已启用 hdr-toys 色调映射，实时调色暂停")
+            Log.i(TAG, "AUTO HDR：gamma=$gamma primaries=$primaries → ${chain.name}")
+        } else {
+            resumeLutAfterHdr()
+        }
+    }
+
+    private fun suspendLutForHdr() {
+        if (lutSuspendedForHdr) return
+        lutSuspendedForHdr = true
+        if (lastLutSignature != null && lastLutSignature != DISABLED_LUT_SIGNATURE) {
+            MPVLib.setString("target-lut", "")
+        }
+        lastLutSignature = null
+        pendingLutSignature = null
+    }
+
+    private fun resumeLutAfterHdr() {
+        if (!lutSuspendedForHdr) return
+        lutSuspendedForHdr = false
+        lastLutSignature = null
+        suspendedLutSettings?.let { applyLut(it) }
+    }
+
+    /** 把 Anime4K + hdr-toys 两部分拼成完整的 glsl-shaders 并下发。 */
+    private fun applyShaderList(): Boolean {
+        val joined = (anime4kShaderPaths + hdrShaderPaths).joinToString(":")
+        val ret = MPVLib.setString("glsl-shaders", joined)
+        if (ret < 0) {
+            Log.w(TAG, "运行期更新 glsl-shaders 失败：$ret")
+            return false
+        }
+        return true
+    }
+
+    /** 热管理轮询：只在 Anime4K 生效时运行，只降不升（见 [ThermalGuard]）。 */
+    private val thermalPoll = object : Runnable {
+        override fun run() {
+            if (released || !created || anime4kShaderPaths.isEmpty()) return
+            val headroom = ThermalGuard.headroom(context)
+            when (ThermalGuard.level(headroom)) {
+                ThermalGuard.Level.HOT -> {
+                    anime4kShaderPaths = emptyList()
+                    if (applyShaderList()) {
+                        enhancementNoticeReporter?.invoke(
+                            "设备过热（余量 %.2f），已停用 Anime4K 以避免降频卡顿".format(java.util.Locale.US, headroom)
+                        )
+                    }
+                    return
+                }
+                ThermalGuard.Level.WARM -> if (anime4kQuality != Anime4kQuality.Fast) {
+                    val fast = MpvAnime4k.resolvePaths(context, true, anime4kMode, Anime4kQuality.Fast)
+                    if (fast != null) {
+                        anime4kQuality = Anime4kQuality.Fast
+                        anime4kShaderPaths = fast.split(':').filter { it.isNotBlank() }
+                        if (applyShaderList()) {
+                            enhancementNoticeReporter?.invoke("设备偏热，Anime4K 已降到「性能优先」档")
+                        }
+                    }
+                }
+                ThermalGuard.Level.NORMAL -> Unit
+            }
+            mainHandler.postDelayed(this, ThermalGuard.SAMPLE_INTERVAL_MS)
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // v2 播放控制增强（参考 mpvRx：A-B 循环 / 逐帧 / 音量增强 / 缩放平移 / 自动裁边 / 截图 / 统计）
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** A-B 循环；任一端为 null 表示清除该端（mpv 的 `ab-loop-a/b = no`）。 */
+    fun setAbLoop(aMs: Long?, bMs: Long?) {
+        if (released || !created) return
+        setStringChecked("ab-loop-a", aMs?.let { formatSeconds(it) } ?: "no")
+        setStringChecked("ab-loop-b", bMs?.let { formatSeconds(it) } ?: "no")
+    }
+
+    /** 逐帧步进（会自动暂停）。 */
+    fun frameStep(forward: Boolean) {
+        if (released || !created) return
+        MPVLib.cmd(if (forward) "frame-step" else "frame-back-step")
+    }
+
+    /**
+     * 音量（百分比）。100 以上需要 init 时设置过 `volume-max`（见 [MpvEnhancementOptions.volumeMaxPercent]），
+     * 否则 mpv 会夹到 100。
+     */
+    fun setVolumePercent(percent: Int) {
+        if (released || !created) return
+        setDoubleChecked("volume", percent.coerceIn(0, 300).toDouble())
+    }
+
+    /**
+     * 缩放与平移：[scale] 为线性倍数（1 = 原始），mpv 的 `video-zoom` 是以 2 为底的对数。
+     * 平移量以画面宽/高为单位（-1..1）。
+     */
+    fun setVideoZoom(scale: Float, panX: Float, panY: Float) {
+        if (released || !created) return
+        val zoom = kotlin.math.ln(scale.coerceIn(0.5f, 4f).toDouble()) / kotlin.math.ln(2.0)
+        setDoubleChecked("video-zoom", zoom)
+        setDoubleChecked("video-pan-x", panX.coerceIn(-1f, 1f).toDouble())
+        setDoubleChecked("video-pan-y", panY.coerceIn(-1f, 1f).toDouble())
+    }
+
+    /**
+     * 自动裁黑边：截一帧 → [AutoCropDetector] → `video-crop`。必须在后台线程调用（内部要等截图）。
+     * @return 给用户看的一句结论。
+     */
+    fun autoCrop(): String {
+        val frame = captureFrameForAnalysis(maxSide = 960) ?: return "没抓到画面：${lastCaptureFailure.orEmpty()}"
+        val crop = try {
+            val w = frame.width
+            val h = frame.height
+            val px = IntArray(w * h)
+            frame.getPixels(px, 0, w, 0, 0, w, h)
+            AutoCropDetector.detect(px, w, h)
+        } finally {
+            frame.recycle()
+        }
+        if (crop == null || crop.isEmpty) return "没有检测到可裁的黑边（暗场景时会保守放弃）"
+        val vw = current.videoWidth
+        val vh = current.videoHeight
+        val scaled = if (vw > 0 && vh > 0) crop.scaledTo(vw, vh) else crop
+        val value = scaled.toMpvValue()
+        var ret = 0
+        val done = java.util.concurrent.CountDownLatch(1)
+        mainHandler.post {
+            ret = if (released || !created) MPVLib.ERR_NOT_LOADED else MPVLib.setString("video-crop", value)
+            done.countDown()
+        }
+        done.await(1, java.util.concurrent.TimeUnit.SECONDS)
+        return if (ret >= 0) {
+            "已裁掉黑边：$value"
+        } else {
+            "当前 libmpv 不支持 video-crop（${MPVLib.errorName(ret)}），可改用「比例 → 裁剪铺满」"
+        }
+    }
+
+    fun clearCrop() {
+        if (released || !created) return
+        MPVLib.setString("video-crop", "")
+    }
+
+    /**
+     * 截图到文件（含字幕，所见即所得；与自动分析用的 `video` 模式不同）。必须在后台线程调用。
+     */
+    fun screenshotTo(file: File, timeoutMs: Long = CAPTURE_TIMEOUT_MS): Boolean {
+        if (!created || released) return false
+        file.parentFile?.mkdirs()
+        val path = file.absolutePath.replace('\\', '/')
+        mainHandler.post {
+            if (released || !created) return@post
+            MPVLib.cmd("screenshot-to-file", path, "subtitles")
+        }
+        return awaitFile(file, timeoutMs)
+    }
+
+    /** 统计浮层用的快照（主线程调用，约 12 次 JNI 读）。 */
+    fun readStats(): MpvStats? {
+        if (released || !created) return null
+        return MpvStats(
+            videoCodec = MPVLib.getString("video-codec").orEmpty(),
+            audioCodec = MPVLib.getString("audio-codec-name").orEmpty(),
+            hwdec = MPVLib.getString("hwdec-current").orEmpty(),
+            vo = MPVLib.getString("current-vo").orEmpty(),
+            width = MPVLib.getInt("width") ?: 0,
+            height = MPVLib.getInt("height") ?: 0,
+            containerFps = MPVLib.getDouble("container-fps") ?: 0.0,
+            estimatedFps = MPVLib.getDouble("estimated-vf-fps") ?: 0.0,
+            droppedFrames = MPVLib.getInt("frame-drop-count") ?: 0,
+            decoderDroppedFrames = MPVLib.getInt("decoder-frame-drop-count") ?: 0,
+            videoBitrate = MPVLib.getDouble("video-bitrate") ?: 0.0,
+            cacheSeconds = MPVLib.getDouble("demuxer-cache-duration") ?: 0.0,
+            avsync = MPVLib.getDouble("avsync") ?: 0.0,
+            hdrChain = activeHdrChain?.name
+        )
+    }
+
+    private fun formatSeconds(ms: Long): String =
+        String.format(java.util.Locale.US, "%.3f", ms.coerceAtLeast(0L) / 1000.0)
+
+    /** mpv 统计快照。 */
+    data class MpvStats(
+        val videoCodec: String,
+        val audioCodec: String,
+        val hwdec: String,
+        val vo: String,
+        val width: Int,
+        val height: Int,
+        val containerFps: Double,
+        val estimatedFps: Double,
+        val droppedFrames: Int,
+        val decoderDroppedFrames: Int,
+        val videoBitrate: Double,
+        val cacheSeconds: Double,
+        val avsync: Double,
+        val hdrChain: String?
+    )
+
+    // ─────────────────────────────────────────────────────────────────────────
     // 渲染面
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -931,6 +1242,8 @@ class MpvPlaybackEngine(
                 }
                 // AUTO 档要等 FILE_LOADED 之后 video-params 才有值，所以放在这里细化。
                 refineAutoHwdec()
+                // v2：同一时机按片源决定 HDR 管线 / Anime4K 分辨率守卫 / 热管理，并上报帧率给刷新率匹配。
+                onFileLoadedEnhancements()
                 // 画面到底出没出来，要等 VO 初始化之后才知道，所以延后一拍再查。
                 scheduleVideoOutputAudit()
                 scheduleFrameStatsPoll()

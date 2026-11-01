@@ -21,8 +21,8 @@ class OfficialSearchFormTest {
         val html = """
             <html><body>
               <form action="https://faleno.jp/search/" method="get">
-                <input type="text" name="q" placeholder="作品を検索">
-                <button type="submit">検索</button>
+                <input type="text" name="q" placeholder="search">
+                <button type="submit">search</button>
               </form>
             </body></html>
         """.trimIndent()

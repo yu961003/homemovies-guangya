@@ -3,12 +3,12 @@ package com.example.localmovielibrarz.scraper
 /**
  * 一本道（1pondo.tv）作品 JSON 的解析（peach `sources/onepondo.py` 的 Kotlin 移植）。
  *
- * 为什么这家值得单独接：无码番号在 JAV 目录站上要么没有、要么给的是**转售商的上架日**
+ * 为什么这家值得单独接：无码番号在 影片 目录站上要么没有、要么给的是**转售商的上架日**
  * （`092415_001` javdb 报 2016-06-16，而番号自己写着 2015-09-24）。发行方自己那一页才是正主，
  * 而且它不要解析 HTML——站点前端读的就是 `dyn/phpauto/movie_details/movie_id/<id>.json`，
- * 一次请求给标题、说明、女优（日文与罗马字）、系列、发行日、时长和站内标签，不要凭据。
+ * 一次请求给标题、说明、演员（日文与罗马字）、系列、发行日、时长和站内标签，不要凭据。
  *
- * 番号的分隔符是片商标识：一本道写 `112312_478`，カリビアンコム 写 `040221-001`。两家都按
+ * 番号的分隔符是片商标识：某片商写 `112312_478`，另一片商 写 `040221-001`。两家都按
  * `MMDDYY_nnn` 编号，光看番号分不出是谁家的，所以「要不要问这家」由路由层的证据决定
  * （见 [ScrapeRouteRules] 的无码链），这一站只负责把番号写成官网认的形状并核对返回的 `MovieID`。
  */
@@ -119,10 +119,10 @@ object OnePondoParser {
         )
     }
 
-    /** 女优：日文名是账本的身份写法，罗马字作别名跟着走。 */
+    /** 演员：日文名是账本的身份写法，罗马字作别名跟着走。 */
     private fun actresses(root: PeachJsonValue.Obj): List<String> {
-        val japanese = root["ActressesJa"].stringsOrEmpty().map { it.trim() }.filter { it.isNotEmpty() }
-            .ifEmpty { listOfNotNull(root["Actor"].stringOrEmpty().trim().takeIf { it.isNotEmpty() }) }
+        val japanese = root[ProtocolLabels.ACTORS_JA_KEY].stringsOrEmpty().map { it.trim() }.filter { it.isNotEmpty() }
+            .ifEmpty { listOfNotNull(root[ProtocolLabels.ACTORS_EN_KEY].stringOrEmpty().trim().takeIf { it.isNotEmpty() }) }
         return japanese.distinct()
     }
 

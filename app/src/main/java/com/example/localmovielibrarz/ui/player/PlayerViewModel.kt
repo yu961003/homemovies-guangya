@@ -58,6 +58,14 @@ import com.example.localmovielibrarz.playback.engine.VideoResizeMode
 import com.example.localmovielibrarz.playback.lut.LutAutoAnalysis
 import com.example.localmovielibrarz.playback.lut.LutAutoAnalyzer
 import com.example.localmovielibrarz.playback.lut.LutSettings
+import com.example.localmovielibrarz.playback.lut.LutLook
+import com.example.localmovielibrarz.playback.face.ExoFrameGrabber
+import com.example.localmovielibrarz.playback.face.MediaPipeFaceRegionDetector
+import com.example.localmovielibrarz.data.repository.PlayerFeatureSettings
+import com.example.localmovielibrarz.data.repository.PlayerFeatures
+import android.graphics.Bitmap
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import com.example.localmovielibrarz.playback.vr.VrControlMode
 import com.example.localmovielibrarz.playback.vr.VrMode
 import com.example.localmovielibrarz.playback.vr.VrModeSettings
@@ -112,7 +120,9 @@ class PlayerViewModel(
     private val movieRepository: MovieRepository,
     private val movieId: Long,
     private val usageStatsRepository: UsageStatsRepository,
-    private val localSubtitleLibraryRepository: LocalSubtitleLibraryRepository
+    private val localSubtitleLibraryRepository: LocalSubtitleLibraryRepository,
+    /** v2：播放器增强设置（HDR 管线 / 去色带 / 手势 / 刷新率匹配等）。 */
+    private val playerFeatureSettings: PlayerFeatureSettings
 ) : AndroidViewModel(application) {
     private val speeds = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f)
     private var speedIndex = 1
@@ -214,6 +224,145 @@ class PlayerViewModel(
         mpvEngine?.setVideoResizeMode(VideoResizeMode.fromIndex(index))
     }
 
+    // ───────────────────────────────────────────────────────────────────────
+    // v2：播放增强（mpvRx 能力清单接入）
+    // ───────────────────────────────────────────────────────────────────────
+
+    /**
+     * 播放工具集（A-B 循环 / 逐帧 / 睡眠定时 / 统计 / 截图 / 音量增强）。
+     * 通过 lambda 取「当前」内核实例，切换内核后自动跟随，不持有过期引用。
+     */
+    // by lazy：_uiState 在类体更靠后的位置初始化，直接构造会拿到未初始化的字段。
+    private val tools by lazy {
+        PlayerTools(
+        app = application,
+        scope = viewModelScope,
+        state = _uiState,
+        mpv = { if (isMpvActive()) mpvEngine else null },
+        exo = { if (isMpvActive()) null else _uiState.value.player },
+        positionMs = { currentPlaybackFacts().positionMs },
+        exoDecoderName = { latestVideoDecoder },
+        log = { event, extra -> logPlaybackEvent(event, extra) }
+        )
+    }
+
+    private var featureObserverJob: Job? = null
+
+    /** 订阅增强设置（设置页改动后，下次建 mpv 实例生效；手势/统计等 UI 项立即生效）。 */
+    private fun startFeatureObserver() {
+        featureObserverJob?.cancel()
+        featureObserverJob = viewModelScope.launch {
+            launch {
+                playerFeatureSettings.observe().collect { features ->
+                    _uiState.update { it.copy(playerFeatures = features) }
+                }
+            }
+            // exo 实例每次重建（首次起播 / 切回 exo / 403 重试）都要把音量增强与 A-B 循环重新挂上。
+            launch {
+                _uiState.map { it.player }.distinctUntilChanged().collect { player ->
+                    if (player != null) tools.onExoRecreated()
+                }
+            }
+        }
+        if (playerFeatureSettings.snapshot().statsOverlay) tools.setStatsVisible(true)
+    }
+
+    fun cycleAbLoop() = tools.cycleAbLoop()
+
+    fun clearAbLoop() = tools.clearAbLoop()
+
+    fun frameStep(forward: Boolean) = tools.frameStep(forward)
+
+    fun setSleepTimer(option: SleepTimerOption?) = tools.setSleepTimer(option)
+
+    fun toggleStats() {
+        val next = !_uiState.value.statsVisible
+        tools.setStatsVisible(next)
+        playerFeatureSettings.update { it.copy(statsOverlay = next) }
+    }
+
+    fun setVolumeBoost(percent: Int) {
+        tools.setVolumeBoost(percent)
+        playerFeatureSettings.update { it.copy(volumeBoostPercent = percent.coerceIn(0, PlayerFeatureSettings.MAX_VOLUME_BOOST)) }
+    }
+
+    fun takeScreenshot() {
+        val request = _uiState.value.playbackRequest
+        tools.takeScreenshot(
+            title = title,
+            mediaUri = request?.mediaUri,
+            headers = request?.let { engineHeaders(it) }.orEmpty()
+        )
+    }
+
+    /**
+     * 双指缩放/平移。mpv 由引擎属性完成；exo 由 PlayerScreen 直接缩放渲染面（见 PlayerGestureLayer），
+     * 这里只记录状态，切内核时一并带过去。
+     */
+    fun setZoom(scale: Float, panX: Float, panY: Float) {
+        val clamped = scale.coerceIn(1f, 4f)
+        _uiState.update { it.copy(zoomScale = clamped, zoomPanX = panX, zoomPanY = panY) }
+        if (isMpvActive()) mpvEngine?.setVideoZoom(clamped, panX, panY)
+    }
+
+    fun resetZoom() = setZoom(1f, 0f, 0f)
+
+    /** 自动裁黑边（mpv：`video-crop`；exo 不支持，给出替代建议）。 */
+    fun autoCrop() {
+        val engine = if (isMpvActive()) mpvEngine else null
+        if (engine == null) {
+            _uiState.update { it.copy(toastMessage = "ExoPlayer 内核不支持自动裁边，可用「比例 → 裁剪铺满」或切换到 MPV") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(toastMessage = "正在分析黑边…") }
+            val message = withContext(Dispatchers.IO) { runCatching { engine.autoCrop() }.getOrElse { "自动裁边失败：${it.message}" } }
+            _uiState.update { it.copy(toastMessage = message, cropActive = message.startsWith("已裁掉")) }
+            logPlaybackEvent("player.mpv.autoCrop", mapOf("result" to message))
+        }
+    }
+
+    fun clearCrop() {
+        if (isMpvActive()) mpvEngine?.clearCrop()
+        _uiState.update { it.copy(cropActive = false, toastMessage = "已恢复完整画面") }
+    }
+
+    /** 播放页内一键套用风格（与设置页同一份 LutSettings，两个内核都生效）。 */
+    fun applyLutLook(look: LutLook?) {
+        val base = settingsRepository.getLutSettings()
+        val next = if (look == null) {
+            base.copy(enabled = false)
+        } else {
+            base.withLook(look)
+        }
+        settingsRepository.saveLutSettings(next)
+        _uiState.update {
+            it.copy(
+                lutSettings = next,
+                toastMessage = if (look == null) "已关闭调色" else "已套用风格「${look.label}」"
+            )
+        }
+    }
+
+    fun setLutStrength(percent: Int) {
+        val next = settingsRepository.getLutSettings().withStrength(percent)
+        settingsRepository.saveLutSettings(next)
+        _uiState.update { it.copy(lutSettings = next) }
+    }
+
+    fun dismissEnhancementNotice() {
+        _uiState.update { it.copy(enhancementNotice = null) }
+    }
+
+    fun consumeToast() {
+        _uiState.update { it.copy(toastMessage = null) }
+    }
+
+    /** 记住亮度（设置开启时由 PlayerScreen 在离开播放页时调用）。 */
+    fun rememberBrightness(value: Float) {
+        if (_uiState.value.playerFeatures.rememberBrightness) playerFeatureSettings.saveBrightness(value)
+    }
+
     // 重缓冲统计：累计次数、总时长、上次进入 BUFFERING 的时间戳
     private var rebufferCount = 0
     private var rebufferTotalMs = 0L
@@ -252,8 +401,16 @@ class PlayerViewModel(
 
     init {
         // 解码档位是持久化偏好，面板的选中态第一帧就要对，先同步进状态。
-        _uiState.update { it.copy(mpvHwdecMode = settingsRepository.getMpvHwdecMode()) }
+        _uiState.update {
+            it.copy(
+                mpvHwdecMode = settingsRepository.getMpvHwdecMode(),
+                playerFeatures = playerFeatureSettings.snapshot(),
+                lutSettings = settingsRepository.getLutSettings(),
+                volumeBoostPercent = playerFeatureSettings.snapshot().volumeBoostPercent
+            )
+        }
         startLutObserver()
+        startFeatureObserver()
         viewModelScope.launch {
             val startedAtMs = SystemClock.elapsedRealtime()
             showLoading(initialPlaybackLoadingMessage())
@@ -455,6 +612,11 @@ class PlayerViewModel(
                     override fun onTracksChanged(tracks: Tracks) {
                         latestTracks = tracks
                         refreshAudioTracks(this@apply)
+                        // v2：片源帧率交给刷新率匹配（mpv 侧由引擎的 videoInfoReporter 上报）。
+                        tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_VIDEO && it.isSelected }
+                            ?.let { group -> runCatching { group.getTrackFormat(0) }.getOrNull() }
+                            ?.frameRate?.takeIf { it > 0f }
+                            ?.let { fps -> _uiState.update { state -> state.copy(videoFps = fps) } }
                         // 查询实际使用的渲染器（硬解/软解），不再按编码格式推断
                         val (vDec, aDec) = queryActualDecoders(this@apply)
                         latestVideoDecoder = vDec
@@ -1055,6 +1217,36 @@ class PlayerViewModel(
         uiState.value.player?.setPlaybackSpeed(playbackSpeed)
         return playbackSpeed
     }
+
+    /** 双击快退/快进的步长（秒），供手势反馈显示。 */
+    val seekBackSeconds: Int get() = settingsRepository.getPlayerSeekBackSeconds()
+    val seekForwardSeconds: Int get() = settingsRepository.getPlayerSeekForwardSeconds()
+
+    /**
+     * 长按临时倍速（参考 mpvRx「长按动态倍速」）：直接改内核倍速，不改 [speedIndex]，
+     * 松手后 [endSpeedBoost] 恢复到用户选的倍速。
+     */
+    fun beginSpeedBoost(speed: Float) {
+        val mpv = mpvEngine
+        if (isMpvActive() && mpv != null) {
+            mpv.setSpeed(speed)
+            return
+        }
+        uiState.value.player?.setPlaybackSpeed(speed)
+    }
+
+    fun endSpeedBoost() {
+        val mpv = mpvEngine
+        if (isMpvActive() && mpv != null) {
+            mpv.setSpeed(playbackSpeed)
+            return
+        }
+        uiState.value.player?.setPlaybackSpeed(playbackSpeed)
+    }
+
+    /** 当前是否在播放（手势判断用）。 */
+    val isPlayingNow: Boolean
+        get() = if (isMpvActive()) mpvEngine?.current?.isPlaying == true else uiState.value.player?.isPlaying == true
 
     fun selectAudioTrack(groupIndex: Int?, trackIndex: Int?) {
         val mpv = mpvEngine
@@ -1986,6 +2178,8 @@ class PlayerViewModel(
             anime4kEnabled = settingsRepository.getMpvAnime4kEnabled(),
             anime4kMode = settingsRepository.getMpvAnime4kMode(),
             anime4kQuality = settingsRepository.getMpvAnime4kQuality(),
+            // v2：从 mpvRx 能力清单接入的 init 期选项（HDR 管线 / 去色带 / 省电渲染 / 音量上限 / 自定义选项）。
+            enhancements = playerFeatureSettings.snapshot().toMpvEnhancements(),
         )
         if (initError != null) {
             engine.release()
@@ -2003,6 +2197,13 @@ class PlayerViewModel(
         // 统一折成 player.mpv.frames 事件写进诊断日志，两份内核的卡顿才有可比口径。
         engine.lutFailureReporter = { reason ->
             _uiState.update { it.copy(lutAutoTuneMessage = "实时调色未生效：$reason") }
+        }
+        engine.enhancementNoticeReporter = { notice ->
+            _uiState.update { it.copy(enhancementNotice = notice) }
+            logPlaybackEvent("player.mpv.enhancement", mapOf("notice" to notice))
+        }
+        engine.videoInfoReporter = { _, _, fps ->
+            if (fps > 0.0) _uiState.update { it.copy(videoFps = fps.toFloat()) }
         }
         engine.frameStatsReporter = { stats ->
             // readable=false 表示这三个计数属性读不到（不是「没丢帧」）；带上 vo / fps
@@ -2030,6 +2231,12 @@ class PlayerViewModel(
         // 比例模式是「UI 侧状态」，新建的 mpv 实例不知道用户之前选了哪个，
         // 这里按最近一次 applyResizeMode 的结果重新下发，避免切内核后画面突然回弹。
         engine.setVideoResizeMode(VideoResizeMode.fromIndex(currentResizeIndex))
+        // v2：把「UI 侧状态」的增强项带到新实例（音量增强 / A-B 循环 / 缩放），切内核后不丢。
+        _uiState.value.let { st ->
+            if (st.volumeBoostPercent > 0) engine.setVolumePercent(100 + st.volumeBoostPercent)
+            if (st.abLoopA != null && st.abLoopB != null) engine.setAbLoop(st.abLoopA, st.abLoopB)
+            if (st.zoomScale != 1f) engine.setVideoZoom(st.zoomScale, st.zoomPanX, st.zoomPanY)
+        }
         engine.load(
             uri = request.mediaUri,
             headers = engineHeaders(request),
@@ -2081,8 +2288,8 @@ class PlayerViewModel(
      * 1. 播放中改设置 → 这里收到新值 → 若 mpv 正在出画面，立刻重新下发（滑杆实时生效）；
      * 2. 新建 mpv 实例 → [startMpvSession] 用 [currentLutSettings] 主动下发一次。
      *
-     * 只在 mpv 活跃时下发：exo 侧没有对应的色彩管线（见交付文档的「无法对齐项」），
-     * 对 exo 下发没有意义，且 mpvEngine 为 null 时本来也发不出去。
+     * 两个内核都实时生效：mpv 走 `target-lut`，exo 走 media3 `SingleColorLut`（§5.2-6）。
+     * （v1 注释写的是「exo 没有对应色彩管线」，与 ExoLutEffect 接入后的实际行为不符，已更正。）
      */
     private fun startLutObserver() {
         // 同步读一次：避免第一帧播放时 currentLutSettings 还是默认值（关闭），
@@ -2092,6 +2299,7 @@ class PlayerViewModel(
         lutObserverJob = viewModelScope.launch {
             settingsRepository.observeLutSettings().collect { next ->
                 currentLutSettings = next
+                _uiState.update { it.copy(lutSettings = next) }
                 if (isMpvActive()) {
                     mpvEngine?.applyLut(next)
                 } else {
@@ -2131,21 +2339,21 @@ class PlayerViewModel(
      */
     fun autoTuneLut() {
         if (uiState.value.lutAutoTuneBusy) return
-        if (!isMpvActive()) {
-            _uiState.update { it.copy(lutAutoTuneMessage = "自动分析只在使用 mpv 内核时可用") }
-            return
-        }
-        val engine = mpvEngine ?: run {
+        // v2：exo 内核同样支持（截帧走 ExoFrameGrabber 取原片，见其类注释）。
+        val engine = if (isMpvActive()) mpvEngine else null
+        val request = _uiState.value.playbackRequest
+        if (engine == null && (uiState.value.player == null || request == null)) {
             _uiState.update { it.copy(lutAutoTuneMessage = "播放内核还没就绪，稍后再试") }
             return
         }
+        val positionMs = currentPlaybackFacts().positionMs
         _uiState.update { it.copy(lutAutoTuneBusy = true, lutAutoTuneMessage = null) }
 
         // 截帧要等 mpv 落盘（最长 2s），肤色统计要遍历几十万像素，都在 IO 线程做；
         // 只有最后的写设置与下发回主线程，与 applyLut 的约定一致。
         lutAutoTuneJob = viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { analyzeCurrentFrame(engine) }
+                runCatching { analyzeCurrentFrame(engine, request, positionMs) }
                     .onFailure { logPlaybackEvent("player.lut.autoTune.failed", error = it) }
                     .getOrNull()
             }
@@ -2153,7 +2361,7 @@ class PlayerViewModel(
                 if (result == null) {
                     // 「抓不到画面」本身不是可执行的信息：把引擎记下的具体原因
                     //（含截图超时 / 解码失败 / mpv 日志尾部）带到提示里。
-                    val reason = engine.lastCaptureFailure
+                    val reason = engine?.lastCaptureFailure ?: ExoFrameGrabber.lastFailure
                     val message = if (reason.isNullOrBlank()) {
                         "没抓到画面，换个能看清人脸的场景再试"
                     } else {
@@ -2176,8 +2384,14 @@ class PlayerViewModel(
                 // 再下发一次是为了「分析完立刻看到效果」，且 applyLut 内部按签名去重，
                 // 重复下发是幂等的。
                 currentLutSettings = next
-                if (isMpvActive()) mpvEngine?.applyLut(next)
-                _uiState.update { it.copy(lutAutoTuneMessage = analysis.message) }
+                if (isMpvActive()) {
+                    mpvEngine?.applyLut(next)
+                } else {
+                    (uiState.value.player as? ExoPlayer)?.let { exo ->
+                        exoLutApplier.apply(next) { effects -> exo.setVideoEffects(effects) }
+                    }
+                }
+                _uiState.update { it.copy(lutAutoTuneMessage = analysis.message, lutSettings = next) }
             } finally {
                 _uiState.update { it.copy(lutAutoTuneBusy = false) }
             }
@@ -2187,23 +2401,47 @@ class PlayerViewModel(
     /**
      * 从当前画面提取肤色统计。在 IO 线程调用。
      *
-     * 位图取完像素就 `recycle()`：一帧 1080p 的 ARGB 是 8 MB，分析完不再需要，
-     * 留在那等 GC 会在连续分析几次后明显卡顿。
+     * v2 调用链：截帧（mpv `screenshot-to-file video` / exo `ExoFrameGrabber` 原片）
+     * → MediaPipe 人脸区域（网格 → 检测框 → 无）→ 肤色统计（人脸掩码优先，失败回整帧）
+     * → 模板选择与参数搜索。人脸检测结果与耗时写进诊断日志，便于真机评估召回率。
+     *
+     * 位图取完像素就 `recycle()`：一帧 1080p 的 ARGB 是 8 MB。
      */
-    private fun analyzeCurrentFrame(engine: MpvPlaybackEngine): LutAutoAnalysis? {
-        val bitmap = engine.captureFrameForAnalysis() ?: return null
-        val pixels = try {
+    private fun analyzeCurrentFrame(
+        engine: MpvPlaybackEngine?,
+        request: PlaybackRequest?,
+        positionMs: Long
+    ): LutAutoAnalysis? {
+        val bitmap: Bitmap = if (engine != null) {
+            engine.captureFrameForAnalysis() ?: return null
+        } else {
+            val req = request ?: return null
+            ExoFrameGrabber.grab(application, req.mediaUri, engineHeaders(req), positionMs) ?: return null
+        }
+        return try {
+            val faces = faceDetector.detect(bitmap)
+            logPlaybackEvent(
+                "player.lut.autoTune.faces",
+                mapOf(
+                    "backend" to faces.backend,
+                    "faces" to faces.regions.size.toString(),
+                    "elapsedMs" to faces.elapsedMs.toString(),
+                    "error" to faces.error
+                )
+            )
             val w = bitmap.width
             val h = bitmap.height
             val argb = IntArray(w * h)
             bitmap.getPixels(argb, 0, w, 0, 0, w, h)
-            LutAutoAnalyzer.analyze(argb, w, h)
+            LutAutoAnalyzer.analyze(argb, w, h, faces = faces.regions)
         } finally {
             bitmap.recycle()
         }
-        return pixels
     }
 
+    /** MediaPipe 人脸检测器：首次自动分析时才加载模型（约 30~80 ms），ViewModel 销毁时关闭。 */
+    private val faceDetectorLazy = lazy { MediaPipeFaceRegionDetector(application) }
+    private val faceDetector: MediaPipeFaceRegionDetector by faceDetectorLazy
     /** mpv 的请求头：与 exo 的 DefaultHttpDataSource 默认请求属性保持一致。 */
     private fun engineHeaders(request: PlaybackRequest): Map<String, String> = buildMap {        putAll(request.headers)
         val userAgent = request.userAgent ?: DEFAULT_USER_AGENT
@@ -2529,6 +2767,10 @@ class PlayerViewModel(
         mpvProgressJob?.cancel()
         lutObserverJob?.cancel()
         lutAutoTuneJob?.cancel()
+        featureObserverJob?.cancel()
+        tools.release()
+        exoLutApplier.release()
+        if (faceDetectorLazy.isInitialized()) faceDetector.close()
         synchronized(mpvEngineLock) {
             mpvEngine?.release()
             mpvEngine = null
@@ -2583,7 +2825,8 @@ class PlayerViewModel(
             movieRepository: MovieRepository,
             movieId: Long,
             usageStatsRepository: UsageStatsRepository,
-            localSubtitleLibraryRepository: LocalSubtitleLibraryRepository
+            localSubtitleLibraryRepository: LocalSubtitleLibraryRepository,
+            playerFeatureSettings: PlayerFeatureSettings
         ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
@@ -2602,7 +2845,8 @@ class PlayerViewModel(
                         movieRepository = movieRepository,
                         movieId = movieId,
                         usageStatsRepository = usageStatsRepository,
-                        localSubtitleLibraryRepository = localSubtitleLibraryRepository
+                        localSubtitleLibraryRepository = localSubtitleLibraryRepository,
+                        playerFeatureSettings = playerFeatureSettings
                     ) as T
             }
     }
@@ -2658,6 +2902,28 @@ data class PlayerUiState(
     val lutAutoTuneBusy: Boolean = false,
     /** 上一次分析的结论或失败原因；null 表示还没分析过。 */
     val lutAutoTuneMessage: String? = null,
+    // ── v2：播放增强（mpvRx 能力清单接入）────────────────────────────────
+    /** 播放器增强设置快照（手势开关、刷新率匹配、统计浮层等）。 */
+    val playerFeatures: PlayerFeatures = PlayerFeatures(),
+    /** 当前调色设置（播放页内的风格芯片与强度滑杆读这里）。 */
+    val lutSettings: LutSettings = LutSettings(),
+    /** 增强功能状态提示（HDR 管线启用 / Anime4K 降档 / 调色暂停等）。 */
+    val enhancementNotice: String? = null,
+    /** 一次性的轻提示（截图结果、A-B 设定等），UI 展示后调用 consumeToast。 */
+    val toastMessage: String? = null,
+    val abLoopA: Long? = null,
+    val abLoopB: Long? = null,
+    /** 睡眠定时结束时刻（elapsedRealtime）；null 表示未设置。 */
+    val sleepTimerEndsAt: Long? = null,
+    val statsVisible: Boolean = false,
+    val stats: List<StatsLine> = emptyList(),
+    /** 片源帧率（刷新率匹配用）；0 表示尚未取得。 */
+    val videoFps: Float = 0f,
+    val zoomScale: Float = 1f,
+    val zoomPanX: Float = 0f,
+    val zoomPanY: Float = 0f,
+    val cropActive: Boolean = false,
+    val volumeBoostPercent: Int = 0,
 )
 
 data class AudioTrackOption(

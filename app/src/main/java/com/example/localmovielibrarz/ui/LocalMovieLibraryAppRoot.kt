@@ -32,6 +32,24 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
+import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.runtime.SideEffect
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -115,8 +133,10 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
     var showStartupAnimation by remember {
         mutableStateOf(appContainer.settingsRepository.isStartupAnimationEnabled())
     }
-    val useLightTheme by appContainer.settingsRepository.observeLightThemeEnabled()
-        .collectAsState(initial = appContainer.settingsRepository.isLightThemeEnabled())
+    // v2：外观改由 ThemeSettingsRepository 提供（明暗模式 / 色板 / 动态取色 / AMOLED），
+    // 首次读取会按旧的「浅色主题」开关迁移，升级用户外观不变。
+    val themeSpec by appContainer.themeSettings.observe()
+        .collectAsState(initial = appContainer.themeSettings.snapshot())
     val showBottomBar = currentRoute == Route.Home ||
         currentRoute == Route.Movies ||
         currentRoute == Route.MovieLibrary ||
@@ -174,14 +194,30 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
         }
     }
 
-    HomeMovieTheme(useLightTheme = useLightTheme) {
+    HomeMovieTheme(spec = themeSpec) {
+    // v2：自适应导航。宽度 ≥ 600dp（平板/折叠屏展开/横屏大屏）用侧边导航栏，手机用底部导航栏。
+    val useNavigationRail = LocalConfiguration.current.screenWidthDp >= 600
+    // v2：系统栏图标明暗跟随主题。styles.xml 写死了 windowLightStatusBar=false（白色图标），
+    // 浅色主题下状态栏图标与浅色背景同色、几乎看不见（targetSdk 35 在 Android 15 上强制 edge-to-edge 时尤其明显）。
+    val rootView = LocalView.current
+    val darkScheme = MaterialTheme.colorScheme.isDark
+    if (!rootView.isInEditMode && currentRoute?.startsWith("player/") != true) {
+        SideEffect {
+            val window = (rootView.context as? android.app.Activity)?.window ?: return@SideEffect
+            WindowInsetsControllerCompat(window, rootView).apply {
+                isAppearanceLightStatusBars = !darkScheme
+                isAppearanceLightNavigationBars = !darkScheme
+            }
+        }
+    }
     // 榜单角标：在主题内、Scaffold 外下发一次，所有影片卡片共享同一份名次表。
     Top250BadgeProvider {
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
-            if (showBottomBar) {
+            if (showBottomBar && !useNavigationRail) {
                 AppBottomNavigation(
                     currentRoute = currentRoute,
                     onNavigate = { route ->
@@ -201,6 +237,7 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
             modifier = Modifier
                 .background(MaterialTheme.colorScheme.background)
                 .padding(innerPadding)
+                .padding(start = if (useNavigationRail && showBottomBar) NavigationRailWidth else 0.dp)
         ) {
             NavHost(navController = navController, startDestination = Route.Home) {
                 composable(Route.Home) {
@@ -574,7 +611,8 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                             movieRepository = appContainer.movieRepository,
                             movieId = movieId,
                             usageStatsRepository = appContainer.usageStatsRepository,
-                            localSubtitleLibraryRepository = appContainer.localSubtitleLibraryRepository
+                            localSubtitleLibraryRepository = appContainer.localSubtitleLibraryRepository,
+                            playerFeatureSettings = appContainer.playerFeatureSettings
                         )
                     )
                     PlayerScreen(
@@ -583,6 +621,19 @@ fun LocalMovieLibraryAppRoot(appContainer: AppContainer) {
                     )
                 }
             }
+        }
+    }
+    if (useNavigationRail && showBottomBar) {
+        AppNavigationRail(
+            currentRoute = currentRoute,
+            onNavigate = { route ->
+                navController.navigate(route) {
+                    popUpTo(Route.Home) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
+        )
         }
     }
     }
@@ -731,71 +782,109 @@ private fun CloudProviderSwitchBar(
     }
 }
 
+/** 一级导航目的地（底部导航栏与侧边导航栏共用一份定义，避免两处文案/图标漂移）。 */
+private class TopDestination(
+    val route: String,
+    val icon: ImageVector,
+    val selectedIcon: ImageVector,
+    val description: String,
+    val label: String,
+    val matches: (String?) -> Boolean
+)
+
+private val TopDestinations: List<TopDestination> = listOf(
+    TopDestination(Route.Home, Icons.Outlined.Home, Icons.Rounded.Home, "首页", "首页") { it == Route.Home },
+    TopDestination(Route.Movies, Icons.Outlined.Movie, Icons.Rounded.Movie, "影片", "影片") {
+        it == Route.Movies || it == Route.MovieLibrary || it == Route.FilterResult
+    },
+    TopDestination(Route.Favorites, Icons.Outlined.FavoriteBorder, Icons.Rounded.Favorite, "收藏", "收藏") { it == Route.Favorites },
+    TopDestination(Route.Search, Icons.Outlined.Search, Icons.Rounded.Search, "搜索", "搜索") { it == Route.Search },
+    TopDestination(Route.CloudBrowser, Icons.Outlined.Cloud, Icons.Rounded.Cloud, "网盘", "网盘") { it == Route.CloudBrowser },
+    TopDestination(Route.Settings, Icons.Outlined.Settings, Icons.Rounded.Settings, "设置", "设置") {
+        it == Route.Settings || it == Route.SettingsUpdate || it == Route.SettingsScrapeTasks
+    }
+)
+
+private val NavigationRailWidth = 88.dp
+
+/**
+ * 底部导航栏（MD3）：容器用 surfaceContainer，选中项用 secondaryContainer 胶囊指示器 + 实心图标，
+ * 未选中用描边图标——形态差异而不只是颜色差异，色弱用户也能分辨当前页。
+ */
 @Composable
 private fun AppBottomNavigation(
     currentRoute: String?,
     onNavigate: (String) -> Unit
 ) {
     NavigationBar(
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
         tonalElevation = 0.dp
     ) {
+        TopDestinations.forEach { destination ->
+            val selected = destination.matches(currentRoute)
         NavigationBarItem(
-            selected = currentRoute == Route.Home,
-            onClick = { onNavigate(Route.Home) },
-            icon = { Icon(Icons.Rounded.Home, contentDescription = "首页") },
-            label = { Text("\u9996\u9875") },
+                selected = selected,
+                onClick = { onNavigate(destination.route) },
+                icon = {
+                    Icon(
+                        if (selected) destination.selectedIcon else destination.icon,
+                        contentDescription = destination.description
+                    )
+                },
+                label = { Text(destination.label, maxLines = 1) },
             colors = bottomNavColors()
         )
-        NavigationBarItem(
-            selected = currentRoute == Route.Movies ||
-                currentRoute == Route.MovieLibrary ||
-                currentRoute == Route.FilterResult,
-            onClick = { onNavigate(Route.Movies) },
-            icon = { Icon(Icons.Rounded.Movie, contentDescription = "影片") },
-            label = { Text("\u5F71\u7247") },
-            colors = bottomNavColors()
+        }
+    }
+}
+
+/** 侧边导航栏（宽屏）：与底部导航同一份目的地定义。 */
+@Composable
+private fun AppNavigationRail(
+    currentRoute: String?,
+    onNavigate: (String) -> Unit
+) {
+    NavigationRail(
+        modifier = Modifier.width(NavigationRailWidth).fillMaxHeight(),
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        header = {
+            Spacer(Modifier.windowInsetsPadding(WindowInsets.statusBars).height(8.dp))
+        }
+    ) {
+        Spacer(Modifier.weight(1f))
+        TopDestinations.forEach { destination ->
+            val selected = destination.matches(currentRoute)
+            NavigationRailItem(
+                selected = selected,
+                onClick = { onNavigate(destination.route) },
+                icon = {
+                    Icon(
+                        if (selected) destination.selectedIcon else destination.icon,
+                        contentDescription = destination.description
         )
-        NavigationBarItem(
-            selected = currentRoute == Route.Favorites,
-            onClick = { onNavigate(Route.Favorites) },
-            icon = { Icon(Icons.Rounded.Favorite, contentDescription = "收藏") },
-            label = { Text("\u6536\u85CF") },
-            colors = bottomNavColors()
+                },
+                label = { Text(destination.label, maxLines = 1) },
+                colors = NavigationRailItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                    indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        NavigationBarItem(
-            selected = currentRoute == Route.Search,
-            onClick = { onNavigate(Route.Search) },
-            icon = { Icon(Icons.Rounded.Search, contentDescription = "搜索") },
-            label = { Text("\u641C\u7D22") },
-            colors = bottomNavColors()
         )
-        NavigationBarItem(
-            selected = currentRoute == Route.CloudBrowser,
-            onClick = { onNavigate(Route.CloudBrowser) },
-            icon = { Icon(Icons.Rounded.Cloud, contentDescription = "网盘") },
-            label = { Text("\u7F51\u76D8") },
-            colors = bottomNavColors()
-        )
-        NavigationBarItem(
-            selected = currentRoute == Route.Settings ||
-                currentRoute == Route.SettingsUpdate ||
-                currentRoute == Route.SettingsScrapeTasks,
-            onClick = { onNavigate(Route.Settings) },
-            icon = { Icon(Icons.Rounded.Settings, contentDescription = "设置") },
-            label = { Text("\u8BBE\u7F6E") },
-            colors = bottomNavColors()
-        )
+            Spacer(Modifier.height(4.dp))
+        }
+        Spacer(Modifier.weight(1f))
     }
 }
 
 @Composable
 private fun bottomNavColors() = NavigationBarItemDefaults.colors(
-    selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-    selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
-    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-    unselectedIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-    unselectedTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f)
+    selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+    indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
 )
 
 private object Route {

@@ -35,24 +35,27 @@ const val ContentAlphaHigh = 0.88f
 val MinTouchTarget: Dp = 48.dp
 
 /**
- * 圆角阶梯：6 / 8 / 12 / 16 / 24 / 全圆。原全仓 21 种取值已全部收敛到这 6 档。
+ * 圆角阶梯（v2：MD3 Expressive 取向）：8 / 12 / 16 / 20 / 28 / 全圆。
+ *
+ * v1 是 6 / 8 / 12 / 16 / 24。全仓 200+ 处圆角都经由本对象取值，所以这里调一次，
+ * 卡片、面板、按钮、底部导航指示器会整体变得更圆润、层级更统一，不需要逐个页面改。
  *
  * 默认形态为 [CornerBasedShape]：可直接用于 clip / shape / background / border 等接收 Shape 的位置；
  * 如需在 RoundedCornerShape(topStart = ...) 等局部圆角组合中使用，取对应的 *_Dp 值。
  */
 object AppRadius {
-    val XS: CornerBasedShape = RoundedCornerShape(6.dp)
-    val SM: CornerBasedShape = RoundedCornerShape(8.dp)
-    val MD: CornerBasedShape = RoundedCornerShape(12.dp)
-    val LG: CornerBasedShape = RoundedCornerShape(16.dp)
-    val XL: CornerBasedShape = RoundedCornerShape(24.dp)
+    val XS: CornerBasedShape = RoundedCornerShape(8.dp)
+    val SM: CornerBasedShape = RoundedCornerShape(12.dp)
+    val MD: CornerBasedShape = RoundedCornerShape(16.dp)
+    val LG: CornerBasedShape = RoundedCornerShape(20.dp)
+    val XL: CornerBasedShape = RoundedCornerShape(28.dp)
     val Full: CornerBasedShape = RoundedCornerShape(999.dp)
 
-    val XS_Dp: Dp = 6.dp
-    val SM_Dp: Dp = 8.dp
-    val MD_Dp: Dp = 12.dp
-    val LG_Dp: Dp = 16.dp
-    val XL_Dp: Dp = 24.dp
+    val XS_Dp: Dp = 8.dp
+    val SM_Dp: Dp = 12.dp
+    val MD_Dp: Dp = 16.dp
+    val LG_Dp: Dp = 20.dp
+    val XL_Dp: Dp = 28.dp
 }
 
 /** 间距阶梯：4pt 栅格。 */

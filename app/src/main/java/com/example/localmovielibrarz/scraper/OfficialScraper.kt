@@ -51,14 +51,14 @@ class OfficialScraper(
             html,
             Regex("""<p[^>]*class=["'][^"']*\bp-workPage__text\b[^"']*["'][^>]*>([\s\S]*?)</p>""", RegexOption.IGNORE_CASE)
         )
-        val release = firstLinkTextAfterLabel(html, "発売日")
+        val release = firstLinkTextAfterLabel(html, ProtocolLabels.RELEASE_DATE)
             .replace("年", "-")
             .replace("月", "-")
             .replace("日", "")
             .trim()
         val publisherAndStudio = publisherAndStudio(html)
-        val studio = publisherAndStudio.second.ifBlank { plainTextAfterLabel(html, "製作商") }
-        val tags = linkTextsAfterLabel(html, "ジャンル")
+        val studio = publisherAndStudio.second.ifBlank { plainTextAfterLabel(html, ProtocolLabels.MAKER_3) }
+        val tags = linkTextsAfterLabel(html, ProtocolLabels.GENRE)
             .filterNot { it == "Blu-ray（ブルーレイ）" }
             .distinct()
         val actors = Regex(
@@ -79,10 +79,10 @@ class OfficialScraper(
             outline = outline,
             premiered = release,
             year = Regex("""\d{4}""").find(release)?.value.orEmpty(),
-            runtime = plainTextAfterLabel(html, "収録時間").replace("分", "").digitsOnly(),
+            runtime = plainTextAfterLabel(html, ProtocolLabels.RUNTIME).replace("分", "").digitsOnly(),
             studio = studio,
             publisher = publisherAndStudio.first,
-            series = firstLinkTextAfterLabel(html, "シリーズ"),
+            series = firstLinkTextAfterLabel(html, ProtocolLabels.SERIES),
             directors = listOfNotNull(directorAfterLabel(html).takeIf { it.isNotBlank() }),
             actors = actors,
             genres = tags,
@@ -163,7 +163,7 @@ class OfficialScraper(
         val fromDescription = Regex("""〖公式〗([^(]+)\(([^)]+)""")
             .find(description)
             ?.let { cleanHtml(it.groupValues[1]) to cleanHtml(it.groupValues[2]) }
-        val label = firstLinkTextAfterLabel(html, "レーベル")
+        val label = firstLinkTextAfterLabel(html, ProtocolLabels.LABEL)
         return when {
             label.isNotBlank() -> label to fromDescription?.second.orEmpty()
             fromDescription != null -> fromDescription
@@ -172,7 +172,7 @@ class OfficialScraper(
     }
 
     private fun directorAfterLabel(html: String): String {
-        val value = plainTextAfterLabel(html, "監督")
+        val value = plainTextAfterLabel(html, ProtocolLabels.DIRECTOR)
         return if (value.isPlaceholder()) "" else value
     }
 

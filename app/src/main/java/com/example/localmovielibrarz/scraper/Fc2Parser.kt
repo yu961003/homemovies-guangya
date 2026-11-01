@@ -3,10 +3,10 @@ package com.example.localmovielibrarz.scraper
 /**
  * FC2 内容市场商品页的解析（peach `sources/fc2.py` 的 Kotlin 移植）。
  *
- * 为什么 FC2 必须是链上的第一家而不是交给目录站：FC2 不是 JAV，番号是卖家自己的投稿号。
+ * 为什么 FC2 必须是链上的第一家而不是交给目录站：FC2 不是 影片，番号是卖家自己的投稿号。
  * 目录站按它去查要么没有、要么撞上别的片——peach 实测 r18.dev 对 85 条 FC2 番号问了 85 条
  * 全空，AVBase 与 JavBus 一律回「没有这个番号」。发行方自己那一页才是这批番号的正主：
- * 不要凭据，一次请求给全标题、说明、卖家、商品标签、时长、販売日和封面原图。
+ * 不要凭据，一次请求给全标题、说明、卖家、商品标签、时长、ProtocolLabels.SOLD_DATE和封面原图。
  *
  * 页面主体在 `<script type="application/ld+json">` 的 Product 里，正文 DOM 只补它没有的那几项。
  * 这一点决定了实现形状：**必须先把那段 JSON 单独取出来解析**，不能整体当 HTML 扫——
@@ -20,7 +20,7 @@ package com.example.localmovielibrarz.scraper
  * 合集的封面套给每个分段，屏幕上就是 21 个不同内容顶着同一张图。
  *
  * 官方那一页**不取演员**：它没有演员栏，标题里那个名字是卖家自己写的宣传语，
- * `みお(19)` 这样的写法既不是艺名也没有第二处可以印证。
+ * `样例名(19)` 这样的写法既不是艺名也没有第二处可以印证。
  */
 object Fc2Parser {
 
@@ -37,7 +37,7 @@ object Fc2Parser {
     /**
      * `41:50` 与 `1:23:45` 两种都有。
      *
-     * 不锚定整串：调用方交给 [runtimeMinutes] 的通常是「収録時間：41:50」这样带字段名的正文，
+     * 不锚定整串：调用方交给 [runtimeMinutes] 的通常是「ProtocolLabels.RUNTIME：41:50」这样带字段名的正文，
      * 而 peach 那边拿到的是 `p.items_article_info` 整段的 join 文本——它同样带着字段名，
      * 却用了 `^…$`。这里是刻意分叉：字段名是站方文案，改一个汉字就会让整条时长归零，
      * 而时长本身对账本（去重、同片比对）是有用的证据，不值得为对齐 peach 的正则写法丢掉。
@@ -45,7 +45,7 @@ object Fc2Parser {
      */
     private val RUNTIME = Regex("(?<![\\d:])(?:(\\d{1,2}):)?(\\d{1,2}):(\\d{2})(?!\\d)")
 
-    private val SOLD_ON = Regex("販売日\\s*[:：]\\s*(\\d{4})/(\\d{2})/(\\d{2})")
+    private val SOLD_ON = Regex(ProtocolLabels.SOLD_DATE + "\\s*[:：]\\s*(\\d{4})/(\\d{2})/(\\d{2})")
 
     /**
      * 缩略图服务 → 原件地址：`https://contents-thumbnail2.fc2.com/w276/storage92000.contents.fc2.com/file/…`
@@ -150,7 +150,7 @@ object Fc2Parser {
 
         val product = productBlock(text)
         // 下架的商品这段整个不出现；`article/<id>/` 取不到商品时 FC2 回的是一个 200 的
-        // 「見つかりませんでした」页。两者都是「站上没有」，不是抓取失败。
+        // 「未找到」页。两者都是「站上没有」，不是抓取失败。
         if (product == null) {
             val reason = if (ChallengePageDetector.isChallengePage(text)) {
                 PeachFailureReason.CloudflareChallenge

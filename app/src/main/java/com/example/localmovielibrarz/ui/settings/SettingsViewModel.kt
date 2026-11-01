@@ -32,6 +32,9 @@ import com.example.localmovielibrarz.playback.engine.Anime4kMode
 import com.example.localmovielibrarz.playback.engine.Anime4kQuality
 import com.example.localmovielibrarz.playback.engine.MpvHwdecMode
 import com.example.localmovielibrarz.playback.lut.LutParamKey
+import com.example.localmovielibrarz.playback.lut.LutCreativeKey
+import com.example.localmovielibrarz.playback.lut.LutCreativeParams
+import com.example.localmovielibrarz.playback.lut.LutLook
 import com.example.localmovielibrarz.playback.lut.LutParams
 import com.example.localmovielibrarz.playback.lut.LutPreset
 import com.example.localmovielibrarz.playback.lut.LutSettings
@@ -874,7 +877,7 @@ class SettingsViewModel(
     fun updateLutEnabled(enabled: Boolean) {
         commitLutSettings { current ->
             val params =
-                if (enabled && current.params.isNeutral()) LutPreset.Standard.params
+                if (enabled && current.params.isNeutral() && current.creative.isNeutral() && !current.hasOverlay) LutPreset.Standard.params
                 else current.params
             current.copy(enabled = enabled, params = params)
         }
@@ -918,6 +921,45 @@ class SettingsViewModel(
                     else "已套用「${preset.label}」预设"
             )
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // v2：调色创意层 / 风格预设 / 风格 LUT 叠加
+    // ─────────────────────────────────────────────────────────────────────
+
+    /** 改一个创意参数（滑杆回调）。创意层非中性时自动打开总开关，避免「拖了没反应」。 */
+    fun updateLutCreative(key: LutCreativeKey, value: Int) {
+        commitLutSettings { current ->
+            val next = current.creative.set(key, value)
+            current.copy(creative = next, enabled = current.enabled || !next.isNeutral())
+        }
+    }
+
+    fun resetLutCreative() {
+        commitLutSettings { it.copy(creative = LutCreativeParams.NEUTRAL) }
+        _uiState.update { it.copy(savedMessage = "创意调色已归零") }
+    }
+
+    /** 套用风格预设（参考参数 + 创意层一起替换）。 */
+    fun applyLutLook(look: LutLook) {
+        commitLutSettings { it.withLook(look) }
+        _uiState.update { it.copy(savedMessage = "已套用风格「${look.label}」") }
+    }
+
+    /** 设置/清除风格 LUT 叠加（路径来自 LutOverlayImporter）。 */
+    fun setLutOverlay(path: String?, displayName: String? = null) {
+        commitLutSettings { it.copy(overlayLutPath = path, enabled = it.enabled || path != null) }
+        _uiState.update {
+            it.copy(savedMessage = if (path == null) "已移除风格 LUT" else "已导入风格 LUT：${displayName.orEmpty()}")
+        }
+    }
+
+    fun updateLutOverlayMix(value: Int) {
+        commitLutSettings { it.copy(overlayMixPercent = value.coerceIn(0, 100)) }
+    }
+
+    fun reportMessage(message: String) {
+        _uiState.update { it.copy(savedMessage = message) }
     }
 
     fun updateExternalSubtitleBottomPaddingPercent(value: Int) {

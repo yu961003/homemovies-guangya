@@ -175,10 +175,26 @@ fun PlayerScreen(
     var seekDragTotalX by remember { mutableFloatStateOf(0f) }
     var seekDragTotalY by remember { mutableFloatStateOf(0f) }
     var seekDragPreviewMs by remember { mutableStateOf<Long?>(null) }
+    // v2 手势状态：双击涟漪（连续双击累加秒数）与长按倍速
+    var seekRipple by remember { mutableStateOf<SeekRipple?>(null) }
+    var speedBoost by remember { mutableStateOf<Float?>(null) }
+    val features = uiState.playerFeatures
     val overlayGestureBlocked =
         uiState.externalSubtitlePanelVisible || playbackModePanelVisible || audioTrackDialogVisible
     var brightnessValue by remember(activity) {
         mutableFloatStateOf(activity?.window?.attributes?.screenBrightness?.takeIf { it >= 0f } ?: 0.5f)
+    }
+    // v2「记住亮度」（参考 mpvRx）：进入播放页时恢复上次手势调过的亮度。
+    LaunchedEffect(features.rememberBrightness) {
+        val saved = features.savedBrightness
+        if (features.rememberBrightness && saved in 0.02f..1f) {
+            activity?.window?.let { window ->
+                brightnessValue = saved
+                val attrs = window.attributes
+                attrs.screenBrightness = saved
+                window.attributes = attrs
+            }
+        }
     }
     val originalScreenBrightness = remember(activity) {
         activity?.window?.attributes?.screenBrightness ?: WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
@@ -199,6 +215,7 @@ fun PlayerScreen(
     }
 
     val leavePlayer = {
+        viewModel.rememberBrightness(brightnessValue)
         restorePlayerBrightness()
         viewModel.leavePlayer()
         onBack()
@@ -228,6 +245,7 @@ fun PlayerScreen(
             if (!hadKeepScreenOn) {
                 window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
+            viewModel.rememberBrightness(brightnessValue)
             restorePlayerBrightness()
             viewModel.leavePlayer()
         }
@@ -338,7 +356,15 @@ fun PlayerScreen(
             val buffered = snapshot.bufferedMs.coerceAtLeast(0L)
             if (buffered != bufferedMs) bufferedMs = buffered
             if (snapshot.isPlaying != isPlaying) isPlaying = snapshot.isPlaying
-            delay(if (durationMs <= 0L) 200L else 500L)
+            // v2 轮询退避（参考 mpvRx）：控件隐藏时进度文字不可见，刷新间隔翻倍，减少无谓重组。
+            // 拖动进度的起点在手势回调里直接读 VM 快照，不受这里的刷新间隔影响。
+            delay(
+                when {
+                    durationMs <= 0L -> 200L
+                    controlsVisible -> 500L
+                    else -> 1_000L
+                }
+            )
         }
     }
 
@@ -353,6 +379,27 @@ fun PlayerScreen(
         if (gestureFeedback != null && gestureStartSide == null) {
             delay(850)
             gestureFeedback = null
+        }
+    }
+
+    // v2：动态刷新率匹配（参考 mpvRx）。开启后把窗口的首选显示模式切到「刷新率是片源帧率整数倍」
+    // 的那一档（同分辨率），离开播放页恢复。exo 自身的 ONLY_IF_SEAMLESS 策略保持不变，两者不冲突。
+    DisposableEffect(activity, features.matchRefreshRate, uiState.videoFps) {
+        val window = activity?.window
+        val original = window?.attributes?.preferredDisplayModeId ?: 0
+        if (window != null && features.matchRefreshRate && uiState.videoFps > 1f) {
+            activity?.let { pickDisplayModeFor(it, uiState.videoFps) }?.let { modeId ->
+                val attrs = window.attributes
+                attrs.preferredDisplayModeId = modeId
+                window.attributes = attrs
+            }
+        }
+        onDispose {
+            if (window != null && features.matchRefreshRate) {
+                val attrs = window.attributes
+                attrs.preferredDisplayModeId = original
+                window.attributes = attrs
+            }
         }
     }
 
@@ -385,72 +432,113 @@ fun PlayerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .then(if (vrMode.isVr || controlsLocked || overlayGestureBlocked) Modifier else Modifier.pointerInput(isLandscape, activity, audioManager) {
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        gestureMode = null
-                        gestureStartSide = if (offset.x < size.width / 2f) GestureSide.Brightness else GestureSide.Volume
-                        seekDragStartPositionMs = positionMs
-                        seekDragTotalX = 0f
-                        seekDragTotalY = 0f
+            .playerGestures(
+                enabled = !(vrMode.isVr || controlsLocked || overlayGestureBlocked),
+                config = GestureConfig(
+                    doubleTapSeek = features.doubleTapSeek,
+                    longPressSpeed = features.longPressEnabled,
+                    pinchZoom = features.pinchZoom,
+                    // v1 行为保留：竖屏时不响应拖动（竖屏下半部是控件区，误触率高）。
+                    dragEnabled = isLandscape
+                ),
+                callbacks = remember(viewModel, audioManager) {
+                    object : PlayerGestureCallbacks {
+                        override fun onTap() {
+                            controlsVisible = !controlsVisible
+                        }
+
+                        override fun onDoubleTap(zone: TapZone) {
+                            when (zone) {
+                                TapZone.Center -> {
+                                    viewModel.togglePlayPause()
+                                    controlsVisible = true
+                                }
+                                TapZone.Left, TapZone.Right -> {
+                                    val step = if (zone == TapZone.Left) viewModel.seekBackSeconds else viewModel.seekForwardSeconds
+                                    if (zone == TapZone.Left) viewModel.seekBack() else viewModel.seekForward()
+                                    val previous = seekRipple
+                                    val accumulated = if (previous != null && previous.zone == zone) previous.seconds + step else step
+                                    seekRipple = SeekRipple(zone, accumulated, System.nanoTime())
+                                }
+                            }
+                        }
+
+                        override fun onLongPressStart() {
+                            if (!viewModel.isPlayingNow) return
+                            // 读最新设置：本回调对象被 remember 住，直接捕获 features 会拿到首帧的旧值。
+                            val boost = viewModel.uiState.value.playerFeatures.longPressSpeed
+                            speedBoost = boost
+                            viewModel.beginSpeedBoost(boost)
+                        }
+
+                        override fun onLongPressEnd() {
+                            if (speedBoost != null) {
+                                speedBoost = null
+                                viewModel.endSpeedBoost()
+                            }
+                        }
+
+                        override fun onDragStart(axis: DragAxis) {
+                            gestureMode = if (axis == DragAxis.Horizontal) GestureMode.Seek else GestureMode.VerticalAdjust
+                            gestureStartSide = when (axis) {
+                                DragAxis.VerticalLeft -> GestureSide.Brightness
+                                DragAxis.VerticalRight -> GestureSide.Volume
+                                DragAxis.Horizontal -> null
+                            }
+                            val state = viewModel.uiState.value
+                            seekDragStartPositionMs = if (state.engineKind == PlaybackEngineKind.MPV) {
+                                state.mpvSnapshot.positionMs
+                            } else {
+                                state.player?.currentPosition?.coerceAtLeast(0L) ?: positionMs
+                            }
                         seekDragPreviewMs = null
-                    },
-                    onDragEnd = {
+                        }
+
+                        override fun onDrag(axis: DragAxis, delta: Offset, total: Offset, width: Int, height: Int) {
+                            if (axis == DragAxis.Horizontal) {
+                                if (durationMs <= 0L) return
+                                val seekPerScreenMs = (durationMs * 0.10f).toLong().coerceIn(30_000L, 180_000L)
+                                val deltaMs = ((total.x / width.coerceAtLeast(1)) * seekPerScreenMs).toLong()
+                                seekDragPreviewMs = (seekDragStartPositionMs + deltaMs).coerceIn(0L, durationMs)
+                                controlsVisible = false
+                            } else {
+                                val d = -delta.y / height.coerceAtLeast(1)
+                                if (axis == DragAxis.VerticalLeft) {
+                                    setBrightness(brightnessValue + d * 1.15f)
+                                } else {
+                                    val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                                    setVolume(volumeValue + d * maxVolume * 1.25f)
+                                }
+                            }
+                        }
+
+                        override fun onDragEnd(axis: DragAxis, cancelled: Boolean) {
+                            if (!cancelled) {
                         seekDragPreviewMs?.let { target ->
                             viewModel.seekTo(target)
                             positionMs = target
                         }
+                            }
                         seekDragPreviewMs = null
                         gestureMode = null
                         gestureStartSide = null
-                    },
-                    onDragCancel = {
-                        seekDragPreviewMs = null
-                        gestureMode = null
-                        gestureStartSide = null
-                    },
-                    onDrag = { change, dragAmount ->
-                        if (!isLandscape) return@detectDragGestures
-                        seekDragTotalX += dragAmount.x
-                        seekDragTotalY += dragAmount.y
-                        if (gestureMode == null) {
-                            val threshold = 18f
-                            if (abs(seekDragTotalX) < threshold && abs(seekDragTotalY) < threshold) {
-                                return@detectDragGestures
                             }
-                            gestureMode = if (abs(seekDragTotalX) > abs(seekDragTotalY)) {
-                                GestureMode.Seek
-                            } else {
-                                GestureMode.VerticalAdjust
+
+                        override fun onPinch(zoom: Float, pan: Offset, width: Int, height: Int) {
+                            val state = viewModel.uiState.value
+                            val scale = (state.zoomScale * zoom).coerceIn(1f, 4f)
+                            val limit = ((scale - 1f) / scale).coerceAtLeast(0f)
+                            val panX = (state.zoomPanX + pan.x / (width.coerceAtLeast(1) * scale)).coerceIn(-limit, limit)
+                            val panY = (state.zoomPanY + pan.y / (height.coerceAtLeast(1) * scale)).coerceIn(-limit, limit)
+                            viewModel.setZoom(scale, panX, panY)
                             }
-                        }
-                        if (gestureMode == GestureMode.Seek) {
-                            if (durationMs <= 0L) return@detectDragGestures
-                            val seekPerScreenMs = (durationMs * 0.10f)
-                                .toLong()
-                                .coerceIn(30_000L, 180_000L)
-                            val deltaMs = ((seekDragTotalX / size.width.coerceAtLeast(1)) * seekPerScreenMs).toLong()
-                            seekDragPreviewMs = (seekDragStartPositionMs + deltaMs).coerceIn(0L, durationMs)
-                            controlsVisible = false
-                        } else {
-                            val delta = -dragAmount.y / size.height.coerceAtLeast(1)
-                            when (gestureStartSide) {
-                                GestureSide.Brightness -> {
-                                    setBrightness(brightnessValue + delta * 1.15f)
-                                    controlsVisible = true
-                                }
-                                GestureSide.Volume -> {
-                                    val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-                                    setVolume(volumeValue + delta * maxVolume * 1.25f)
-                                    controlsVisible = true
-                                }
-                                null -> Unit
+
+                        override fun onPinchEnd() {
+                            if (viewModel.uiState.value.zoomScale < 1.05f) viewModel.resetZoom()
                             }
                         }
                     }
                 )
-            })
-            .then(if (vrMode.isVr || controlsLocked || overlayGestureBlocked) Modifier else Modifier.clickable { controlsVisible = !controlsVisible })
     ) {
         if (isMpv) {
             // mpv 出画面：SurfaceView 直挂 libmpv 的 wid，不经过 media3。
@@ -510,6 +598,13 @@ fun PlayerScreen(
                     it.player = player
                     it.resizeMode = resizeModes[resizeModeIndex]
                     it.applyExternalSubtitleStyle(uiState.externalSubtitleStyle)
+                    // v2：双指缩放（exo 侧直接缩放渲染面；mpv 侧走 video-zoom 属性）。
+                    it.videoSurfaceView?.let { surface ->
+                        surface.scaleX = uiState.zoomScale
+                        surface.scaleY = uiState.zoomScale
+                        surface.translationX = uiState.zoomPanX * surface.width * uiState.zoomScale
+                        surface.translationY = uiState.zoomPanY * surface.height * uiState.zoomScale
+                    }
                 }
             )
         }
@@ -535,52 +630,53 @@ fun PlayerScreen(
             modifier = Modifier.align(Alignment.Center)
         )
 
+        SeekRippleOverlay(ripple = seekRipple, onTimeout = { seekRipple = null })
+
+        SpeedBoostBadge(
+            speed = speedBoost,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(top = 24.dp)
+        )
+
+        if (uiState.statsVisible) {
+            PlayerStatsOverlay(
+                lines = uiState.stats,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(start = 16.dp, top = if (controlsVisible) 96.dp else 16.dp)
+            )
+        }
+
         AnimatedVisibility(
             visible = controlsVisible && !controlsLocked,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.fillMaxSize()
         ) {
-            PlayerOverlay(
+            PlayerControlsOverlay(
                 title = viewModel.title,
-                progressBarStyle = uiState.progressBarStyle,
+                statusChips = buildStatusChips(uiState),
                 isPlaying = isPlaying,
                 isLandscape = isLandscape,
                 positionMs = positionMs,
                 durationMs = durationMs,
                 bufferedMs = bufferedMs,
+                abLoopA = uiState.abLoopA,
+                abLoopB = uiState.abLoopB,
+                progressBarStyle = uiState.progressBarStyle,
                 speed = speed,
                 speeds = viewModel.playbackSpeeds,
                 errorMessage = uiState.errorMessage,
                 aspectLabel = aspectLabel(resizeModeIndex),
-                showExternalSubtitleControl = uiState.subtitleFeaturesEnabled,
-                showAudioTrackControl = uiState.audioTracks.count { it.supported } > 1,
-                onBack = leavePlayer,
+                showSubtitle = uiState.subtitleFeaturesEnabled,
+                showAudio = uiState.audioTracks.count { it.supported } > 1,
                 engineKind = uiState.engineKind,
                 engineSwitching = uiState.engineSwitching,
-                onSwitchEngine = {
-                    viewModel.switchEngine(
-                        if (uiState.engineKind == PlaybackEngineKind.MPV) {
-                            PlaybackEngineKind.EXO
-                        } else {
-                            PlaybackEngineKind.MPV
-                        }
-                    )
-                    controlsVisible = true
-                },
-                onAudioTrack = {
-                    audioTrackDialogVisible = true
-                    controlsVisible = true
-                },
-                onExternalSubtitle = {
-                    if (!uiState.subtitleFeaturesEnabled) return@PlayerOverlay
-                    viewModel.openExternalSubtitlePanel(durationMs)
-                    controlsVisible = true
-                },
-                onPlaybackModePanel = {
-                    playbackModePanelVisible = true
-                    controlsVisible = true
-                },
+                actions = PlayerControlActions(
+                    onBack = leavePlayer,
                 onTogglePlay = {
                     viewModel.togglePlayPause()
                     controlsVisible = true
@@ -595,10 +691,11 @@ fun PlayerScreen(
                 },
                 onSeek = { fraction ->
                     // 无真实时长时不允许 seek（避免基于 bufferedMs 的假满刻度导致跳转错位）
-                    if (durationMs <= 0L) return@PlayerOverlay
+                        if (durationMs > 0L) {
                     val target = (durationMs * fraction).toLong().coerceAtLeast(0L)
                     viewModel.seekTo(target)
                     positionMs = target
+                        }
                     controlsVisible = true
                 },
                 onSpeedSelected = { selectedSpeed ->
@@ -607,15 +704,40 @@ fun PlayerScreen(
                 },
                 onAspect = {
                     resizeModeIndex = (resizeModeIndex + 1) % resizeModes.size
-                    // exo 侧由 PlayerView.resizeMode 直接生效；mpv 侧没有对等属性，
-                    // 需要显式把同一个索引翻译成 panscan/keepaspect。
+                        // exo 侧由 PlayerView.resizeMode 直接生效；mpv 侧需要显式翻译成 panscan/keepaspect。
                     viewModel.applyResizeMode(resizeModeIndex)
                     controlsVisible = true
                 },
                 onOrientation = {
                     isLandscape = !isLandscape
                     controlsVisible = true
+                    },
+                    onAudioTrack = {
+                        audioTrackDialogVisible = true
+                        controlsVisible = true
+                    },
+                    onSubtitle = {
+                        if (uiState.subtitleFeaturesEnabled) {
+                            viewModel.openExternalSubtitlePanel(durationMs)
+                            controlsVisible = true
                 }
+                    },
+                    onSwitchEngine = {
+                        viewModel.switchEngine(
+                            if (uiState.engineKind == PlaybackEngineKind.MPV) PlaybackEngineKind.EXO else PlaybackEngineKind.MPV
+                        )
+                        controlsVisible = true
+                    },
+                    onOpenSheet = {
+                        playbackModePanelVisible = true
+                        controlsVisible = true
+                    },
+                    onAbLoop = {
+                        viewModel.cycleAbLoop()
+                        controlsVisible = true
+                    },
+                    onScreenshot = { viewModel.takeScreenshot() }
+                )
             )
         }
 
@@ -624,8 +746,14 @@ fun PlayerScreen(
         // 抢同一块区域，实测会挡住字幕按钮；现在只在顶栏里占约 96dp。
 
         // 切换结果提示（拒绝原因 / 失败原因 / VR 保护提示）统一走这里。
+        LaunchedEffect(uiState.enhancementNotice) {
+            if (uiState.enhancementNotice != null) {
+                delay(5_000)
+                viewModel.dismissEnhancementNotice()
+            }
+        }
         EngineNoticeBanner(
-            notice = uiState.engineSwitchNotice ?: uiState.mpvError,
+            notice = uiState.engineSwitchNotice ?: uiState.mpvError ?: uiState.enhancementNotice,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = 72.dp, start = 24.dp, end = 24.dp)
@@ -656,16 +784,23 @@ fun PlayerScreen(
             onOnlineSelected = viewModel::downloadAndLoadSubtitle
         )
 
-        PlaybackModePanel(
+        PlayerSideSheet(
             visible = playbackModePanelVisible,
-            selectedMode = vrMode,
-            selectedControlMode = vrControlMode,
+            onDismiss = { playbackModePanelVisible = false },
+            model = PlayerSheetModel(
+                vrMode = vrMode,
+                vrControlMode = vrControlMode,
+                engineKind = uiState.engineKind,
+                hwdecMode = uiState.mpvHwdecMode,
             lutAutoTuneBusy = uiState.lutAutoTuneBusy,
             lutAutoTuneMessage = uiState.lutAutoTuneMessage,
-            engineKind = uiState.engineKind,
-            hwdecMode = uiState.mpvHwdecMode,
-            onHwdecMode = viewModel::setMpvHwdecMode,
-            onDismiss = { playbackModePanelVisible = false },
+                lutSettings = uiState.lutSettings,
+                sleepTimerEndsAt = uiState.sleepTimerEndsAt,
+                statsVisible = uiState.statsVisible,
+                volumeBoostPercent = uiState.volumeBoostPercent,
+                zoomScale = uiState.zoomScale,
+                cropActive = uiState.cropActive,
+                hdrLabel = hdrStatusLabel(uiState),
             onVrMode = { mode ->
                 viewModel.setVrMode(mode)
                 controlsVisible = true
@@ -674,7 +809,28 @@ fun PlayerScreen(
                 viewModel.setVrControlMode(mode)
                 controlsVisible = true
             },
-            onAutoTuneLut = { viewModel.autoTuneLut() }
+                onHwdecMode = viewModel::setMpvHwdecMode,
+                onAutoTune = { viewModel.autoTuneLut() },
+                onLook = viewModel::applyLutLook,
+                onLutStrength = viewModel::setLutStrength,
+                onSleepTimer = viewModel::setSleepTimer,
+                onFrameStep = viewModel::frameStep,
+                onToggleStats = viewModel::toggleStats,
+                onVolumeBoost = viewModel::setVolumeBoost,
+                onResetZoom = viewModel::resetZoom,
+                onAutoCrop = viewModel::autoCrop,
+                onClearCrop = viewModel::clearCrop
+            )
+        )
+
+        PlayerToast(
+            message = uiState.toastMessage,
+            onConsumed = viewModel::consumeToast,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(bottom = if (controlsVisible) 150.dp else 40.dp)
+                .zIndex(30f)
         )
 
         AudioTrackDialog(
@@ -1575,459 +1731,7 @@ private fun PlayerView.applyExternalSubtitleStyle(style: ExternalSubtitleStyleSe
     )
 }
 
-@Composable
-private fun PlayerOverlay(
-    title: String,
-    progressBarStyle: PlayerProgressBarStyleSettings,
-    isPlaying: Boolean,
-    isLandscape: Boolean,
-    positionMs: Long,
-    durationMs: Long,
-    bufferedMs: Long,
-    speed: Float,
-    speeds: List<Float>,
-    errorMessage: String?,
-    aspectLabel: String,
-    showExternalSubtitleControl: Boolean,
-    showAudioTrackControl: Boolean,
-    engineKind: PlaybackEngineKind,
-    engineSwitching: Boolean,
-    onBack: () -> Unit,
-    onAudioTrack: () -> Unit,
-    onExternalSubtitle: () -> Unit,
-    onSwitchEngine: () -> Unit,
-    onPlaybackModePanel: () -> Unit,
-    onTogglePlay: () -> Unit,
-    onSeekBack: () -> Unit,
-    onSeekForward: () -> Unit,
-    onSeek: (Float) -> Unit,
-    onSpeedSelected: (Float) -> Unit,
-    onAspect: () -> Unit,
-    onOrientation: () -> Unit,
-) {
-    var speedMenuExpanded by remember { mutableStateOf(false) }
-    var overlayRootOffset by remember { mutableStateOf(Offset.Zero) }
-    var overlaySize by remember { mutableStateOf(IntSize.Zero) }
-    var speedButtonOffset by remember { mutableStateOf(IntOffset.Zero) }
-    var speedButtonSize by remember { mutableStateOf(IntSize.Zero) }
-    val density = LocalDensity.current
-    val dismissSpeedMenuInteraction = remember { MutableInteractionSource() }
-    val menuWidthPx = with(density) { 92.dp.roundToPx() }
-    val menuItemHeightPx = with(density) { 36.dp.roundToPx() }
-    val menuPaddingPx = with(density) { 6.dp.roundToPx() }
-    val menuGapPx = with(density) { 10.dp.roundToPx() }
-    val menuMarginPx = with(density) { 12.dp.roundToPx() }
-    val menuHeightPx = menuItemHeightPx * speeds.size + menuPaddingPx * 2
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .onGloballyPositioned { coordinates ->
-                overlayRootOffset = coordinates.positionInRoot()
-                overlaySize = coordinates.size
-            }
-    ) {
-        TopGradientBar(
-            title = title,
-            showExternalSubtitleControl = showExternalSubtitleControl,
-            showAudioTrackControl = showAudioTrackControl,
-            engineKind = engineKind,
-            engineSwitching = engineSwitching,
-            onBack = onBack,
-            onAudioTrack = onAudioTrack,
-            onExternalSubtitle = onExternalSubtitle,
-            onSwitchEngine = onSwitchEngine,
-            onModeMenuClick = {
-                speedMenuExpanded = false
-                onPlaybackModePanel()
-            },
-            modifier = Modifier.align(Alignment.TopCenter)
-        )
-
-        BottomGradientControls(
-            positionMs = positionMs,
-            durationMs = durationMs,
-            bufferedMs = bufferedMs,
-            progressBarStyle = progressBarStyle,
-            speed = speed,
-            aspectLabel = aspectLabel,
-            errorMessage = errorMessage,
-            isPlaying = isPlaying,
-            isLandscape = isLandscape,
-            onSeekBack = onSeekBack,
-            onTogglePlay = onTogglePlay,
-            onSeekForward = onSeekForward,
-            onSeek = onSeek,
-            onSpeedClick = {
-                speedMenuExpanded = true
-            },
-            onSpeedButtonPositioned = { coordinates ->
-                val position = coordinates.positionInRoot()
-                speedButtonOffset = IntOffset(
-                    x = (position.x - overlayRootOffset.x).roundToInt(),
-                    y = (position.y - overlayRootOffset.y).roundToInt()
-                )
-                speedButtonSize = coordinates.size
-            },
-            onAspect = onAspect,
-            onOrientation = onOrientation,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
-
-        if (speedMenuExpanded) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(8f)
-                    .clickable(
-                        interactionSource = dismissSpeedMenuInteraction,
-                        indication = null
-                    ) {
-                        speedMenuExpanded = false
-                    }
-            )
-        }
-
-        AnimatedVisibility(
-            visible = speedMenuExpanded,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { it / 5 }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 5 }),
-            modifier = Modifier
-                .zIndex(9f)
-                .offset {
-                    val centeredX = speedButtonOffset.x + speedButtonSize.width / 2 - menuWidthPx / 2
-                    val maxX = (overlaySize.width - menuWidthPx - menuMarginPx).coerceAtLeast(menuMarginPx)
-                    val x = centeredX.coerceIn(menuMarginPx, maxX)
-                    val preferredY = speedButtonOffset.y - menuHeightPx - menuGapPx
-                    val maxY = (overlaySize.height - menuHeightPx - menuMarginPx).coerceAtLeast(menuMarginPx)
-                    val fallbackY = speedButtonOffset.y + speedButtonSize.height + menuGapPx
-                    val y = if (preferredY >= menuMarginPx) {
-                        preferredY
-                    } else {
-                        fallbackY.coerceIn(menuMarginPx, maxY)
-                    }
-                    IntOffset(x, y)
-                }
-        ) {
-            PlaybackSpeedInlineMenu(
-                speeds = speeds,
-                selectedSpeed = speed,
-                onSpeedSelected = { selectedSpeed ->
-                    onSpeedSelected(selectedSpeed)
-                    speedMenuExpanded = false
-                }
-            )
-        }
-
-    }
-}
-
-@Composable
-private fun TopGradientBar(
-    title: String,
-    showExternalSubtitleControl: Boolean,
-    showAudioTrackControl: Boolean,
-    engineKind: PlaybackEngineKind,
-    engineSwitching: Boolean,
-    onBack: () -> Unit,
-    onAudioTrack: () -> Unit,
-    onExternalSubtitle: () -> Unit,
-    onSwitchEngine: () -> Unit,
-    onModeMenuClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(112.dp)
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color.Black.copy(alpha = 0.78f), Color.Transparent)
-                )
-            )
-            .windowInsetsPadding(WindowInsets.statusBars)
-            .padding(horizontal = 18.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        GlassIconButton(icon = Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", onClick = onBack)
-        Text(
-            text = title,
-            color = Color.White,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 14.dp, vertical = 12.dp)
-        )
-        // 内核切换 pill：只占约 96dp，紧贴右侧按钮组左侧，不会遮挡字幕按钮。
-        // 顶栏按钮是 48dp 圆钮（MinTouchTarget），中心在 24dp；pill 高 30dp，
-        // 加 9dp 上边距后中心同为 24dp，视觉上与右侧按钮同一水平线。
-        EngineSwitchPill(
-            current = engineKind,
-            switching = engineSwitching,
-            onSwitch = onSwitchEngine,
-            modifier = Modifier.padding(top = 9.dp, end = 10.dp)
-        )
-        if (showAudioTrackControl) {
-            GlassIconButton(
-                icon = Icons.Rounded.VolumeUp,
-                contentDescription = "音轨",
-                onClick = onAudioTrack
-            )
-        }
-        if (showExternalSubtitleControl) {
-            GlassIconButton(
-                icon = Icons.Rounded.ClosedCaption,
-                contentDescription = "字幕",
-                onClick = onExternalSubtitle
-            )
-        }
-        GlassIconButton(
-            icon = Icons.Rounded.MoreVert,
-            contentDescription = "\u64AD\u653E\u6A21\u5F0F",
-            onClick = onModeMenuClick
-        )
-    }
-}
-
-@Composable
-private fun PlaybackModePanel(
-    visible: Boolean,
-    selectedMode: VrMode,
-    selectedControlMode: VrControlMode,
-    lutAutoTuneBusy: Boolean,
-    lutAutoTuneMessage: String?,
-    engineKind: PlaybackEngineKind,
-    hwdecMode: MpvHwdecMode,
-    onHwdecMode: (MpvHwdecMode) -> Unit,
-    onDismiss: () -> Unit,
-    onVrMode: (VrMode) -> Unit,
-    onVrControlMode: (VrControlMode) -> Unit,
-    onAutoTuneLut: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .zIndex(19f)
-    ) {
-        val quietClickSource = remember { MutableInteractionSource() }
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.22f))
-                    .clickable(
-                        interactionSource = quietClickSource,
-                        indication = null,
-                        onClick = onDismiss
-                    )
-            )
-        }
-
-        AnimatedVisibility(
-            visible = visible,
-            enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
-            exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
-            modifier = Modifier.align(Alignment.CenterEnd)
-        ) {
-            PlaybackModeSidePanel(
-                selectedMode = selectedMode,
-                selectedControlMode = selectedControlMode,
-                lutAutoTuneBusy = lutAutoTuneBusy,
-                lutAutoTuneMessage = lutAutoTuneMessage,
-                engineKind = engineKind,
-                hwdecMode = hwdecMode,
-                onHwdecMode = onHwdecMode,
-                onDismiss = onDismiss,
-                onVrMode = onVrMode,
-                onVrControlMode = onVrControlMode,
-                onAutoTuneLut = onAutoTuneLut
-            )
-        }
-    }
-}
-
-@Composable
-private fun PlaybackModeSidePanel(
-    selectedMode: VrMode,
-    selectedControlMode: VrControlMode,
-    lutAutoTuneBusy: Boolean,
-    lutAutoTuneMessage: String?,
-    onDismiss: () -> Unit,
-    onVrMode: (VrMode) -> Unit,
-    onVrControlMode: (VrControlMode) -> Unit,
-    engineKind: PlaybackEngineKind,
-    hwdecMode: MpvHwdecMode,
-    onHwdecMode: (MpvHwdecMode) -> Unit,
-    onAutoTuneLut: () -> Unit
-) {
-    BoxWithConstraints(modifier = Modifier.fillMaxHeight()) {
-        val panelWidth = when {
-            maxWidth < 320.dp -> maxWidth
-            maxWidth < 520.dp -> maxWidth - 88.dp
-            else -> 300.dp
-        }
-        Column(
-            modifier = Modifier
-                .fillMaxHeight()
-                .width(panelWidth)
-                .clip(RoundedCornerShape(topStart = AppRadius.LG_Dp, bottomStart = AppRadius.LG_Dp))
-                .background(Color(0xF21A1C20))
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .windowInsetsPadding(WindowInsets.navigationBars)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {}
-                )
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "播放模式",
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = onDismiss, modifier = Modifier.sizeIn(minWidth = MinTouchTarget, minHeight = MinTouchTarget)) {
-                    Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White, modifier = Modifier.size(18.dp))
-                }
-            }
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                PlaybackModeSectionTitle("画面")
-                VrMode.entries.forEach { mode ->
-                    PlaybackModeOptionRow(
-                        title = mode.label,
-                        subtitle = mode.modeSubtitle(),
-                        selected = mode == selectedMode,
-                        enabled = true,
-                        onClick = { onVrMode(mode) }
-                    )
-                }
-                HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
-                PlaybackModeSectionTitle("控制方式")
-                VrControlMode.entries.forEach { mode ->
-                    PlaybackModeOptionRow(
-                        title = mode.label,
-                        subtitle = mode.controlSubtitle(),
-                        selected = mode == selectedControlMode,
-                        enabled = selectedMode.isVr,
-                        onClick = { onVrControlMode(mode) }
-                    )
-                }
-                HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
-                PlaybackModeSectionTitle("调色")
-                PlaybackModeOptionRow(
-                    title = if (lutAutoTuneBusy) "正在分析当前画面…" else "自动分析调参",
-                    subtitle = if (lutAutoTuneBusy) {
-                        "截帧 + 肤色识别 + 搜参，约 1 秒"
-                    } else {
-                        lutAutoTuneMessage ?: "按当前画面推一组参数（仅 mpv）"
-                    },
-                    selected = false,
-                    enabled = !lutAutoTuneBusy,
-                    onClick = onAutoTuneLut
-                )
-                if (engineKind == PlaybackEngineKind.MPV) {
-                    // 三档硬解只在 mpv 内核下有意义：exo 的硬解由 media3 自己挑，
-                    // 没有「零拷贝 / 回拷 / 软解」这种可选档位可对。
-                    HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
-                    PlaybackModeSectionTitle("解码（MPV）")
-                    MpvHwdecMode.entries.forEach { mode ->
-                        PlaybackModeOptionRow(
-                            title = mode.label,
-                            subtitle = mode.subtitle,
-                            selected = mode == hwdecMode,
-                            enabled = true,
-                            onClick = { onHwdecMode(mode) }
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PlaybackModeSectionTitle(text: String) {
-    Text(
-        text = text,
-        color = Color.White.copy(alpha = 0.58f),
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(horizontal = 2.dp)
-    )
-}
-
-@Composable
-private fun PlaybackModeOptionRow(
-    title: String,
-    subtitle: String,
-    selected: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(AppRadius.SM)
-            .background(
-                when {
-                    selected -> Color.White.copy(alpha = 0.16f)
-                    enabled -> Color.White.copy(alpha = 0.07f)
-                    else -> Color.White.copy(alpha = 0.035f)
-                }
-            )
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                text = title,
-                color = Color.White.copy(alpha = if (enabled) 0.96f else 0.36f),
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = subtitle,
-                color = Color.White.copy(alpha = if (enabled) 0.58f else 0.28f),
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        if (selected) {
-            Text(
-                text = "\u2713",
-                color = Color.White,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold
-            )
-        }
-    }
-}
-
-private fun VrMode.modeSubtitle(): String =
+internal fun VrMode.modeSubtitle(): String =
     when (this) {
         VrMode.Normal2D -> "普通 2D 播放"
         VrMode.Vr360 -> "360 全景"
@@ -2038,274 +1742,11 @@ private fun VrMode.modeSubtitle(): String =
         VrMode.Vr180Ou -> "180 上下"
     }
 
-private fun VrControlMode.controlSubtitle(): String =
+internal fun VrControlMode.controlSubtitle(): String =
     when (this) {
         VrControlMode.Touch -> "手指拖动画面"
         VrControlMode.Sensor -> "跟随陀螺仪"
         VrControlMode.TouchAndSensor -> "手指和陀螺仪同时启用"
-    }
-
-@Composable
-private fun CenterControls(
-    isPlaying: Boolean,
-    onSeekBack: () -> Unit,
-    onTogglePlay: () -> Unit,
-    onSeekForward: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        RoundIconButton(
-            icon = Icons.Rounded.Replay10,
-            contentDescription = "Replay 10 seconds",
-            size = 42,
-            iconSize = 27,
-            onClick = onSeekBack
-        )
-        RoundIconButton(
-            icon = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-            contentDescription = if (isPlaying) "Pause" else "Play",
-            size = 54,
-            iconSize = 32,
-            onClick = onTogglePlay
-        )
-        RoundIconButton(
-            icon = Icons.Rounded.Forward10,
-            contentDescription = "Forward 10 seconds",
-            size = 42,
-            iconSize = 27,
-            onClick = onSeekForward
-        )
-    }
-}
-
-@Composable
-private fun BottomGradientControls(
-    positionMs: Long,
-    durationMs: Long,
-    bufferedMs: Long,
-    progressBarStyle: PlayerProgressBarStyleSettings,
-    speed: Float,
-    aspectLabel: String,
-    errorMessage: String?,
-    isPlaying: Boolean,
-    isLandscape: Boolean,
-    onSeekBack: () -> Unit,
-    onTogglePlay: () -> Unit,
-    onSeekForward: () -> Unit,
-    onSeek: (Float) -> Unit,
-    onSpeedClick: () -> Unit,
-    onSpeedButtonPositioned: (LayoutCoordinates) -> Unit,
-    onAspect: () -> Unit,
-    onOrientation: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.88f))
-                )
-            )
-            .windowInsetsPadding(WindowInsets.navigationBars)
-            .padding(horizontal = 24.dp, vertical = 12.dp)
-    ) {
-        errorMessage?.let {
-            Text(
-                text = "Playback failed: $it",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // H+1 轮：拖动进度条时只在本地更新，松手（onValueChangeFinished）才真正 seek。
-            // 原实现 onValueChange 每帧都调 viewModel.seekTo()，拖动 1 秒 ≈ 60 次 seek
-            //（网盘直链每次 seek 都要重新缓冲），且每帧写顶层 positionMs 触发整页重组。
-            var dragProgress by remember { mutableStateOf<Float?>(null) }
-            // 无真实时长时不显示假满刻度，进度条置 0 且禁用拖动
-            val displayDuration = durationMs
-            val playedProgress = if (displayDuration > 0) {
-                (positionMs.toFloat() / displayDuration.toFloat()).coerceIn(0f, 1f)
-            } else 0f
-            val progress = dragProgress ?: playedProgress
-            // 拖动过程中同步预览拖拽到的时间点
-            TimeText(formatTime(dragProgress?.let { (displayDuration * it).toLong() } ?: positionMs))
-            val barColor = Color(progressBarStyle.colorArgb).copy(alpha = progressBarStyle.alphaPercent / 100f)
-            Box(
-                modifier = Modifier.weight(1f).height(progressBarStyle.widthDp.coerceIn(2, 12).dp + 28.dp).padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier.fillMaxWidth().height(progressBarStyle.widthDp.coerceIn(2, 12).dp)
-                        .clip(AppRadius.Full).background(Color.White.copy(alpha = 0.25f))
-                ) {
-                    Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(progress).background(barColor))
-                }
-                Slider(
-                    value = progress,
-                    onValueChange = { dragProgress = it },
-                    onValueChangeFinished = {
-                        val target = dragProgress
-                        dragProgress = null
-                        if (target != null) onSeek(target)
-                    },
-                    enabled = displayDuration > 0,
-                    colors = SliderDefaults.colors(
-                        thumbColor = barColor,
-                        activeTrackColor = Color.Transparent,
-                        inactiveTrackColor = Color.Transparent
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            // 无真实时长时显示 --:--，不显示假的大约时间
-            TimeText(if (durationMs > 0) formatTime(durationMs) else "--:--")
-        }
-        if (isLandscape) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 0.dp)
-            ) {
-                CenterControls(
-                    isPlaying = isPlaying,
-                    onSeekBack = onSeekBack,
-                    onTogglePlay = onTogglePlay,
-                    onSeekForward = onSeekForward,
-                    modifier = Modifier.align(Alignment.Center)
-                )
-                PlayerToolRow(
-                    speed = speed,
-                    isLandscape = isLandscape,
-                    onSpeedClick = onSpeedClick,
-                    onSpeedButtonPositioned = onSpeedButtonPositioned,
-                    onOrientation = onOrientation,
-                    modifier = Modifier.align(Alignment.CenterEnd)
-                )
-            }
-        } else {
-            CenterControls(
-                isPlaying = isPlaying,
-                onSeekBack = onSeekBack,
-                onTogglePlay = onTogglePlay,
-                onSeekForward = onSeekForward,
-                modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .padding(top = 0.dp, bottom = 6.dp)
-            )
-            PlayerToolRow(
-                speed = speed,
-                isLandscape = isLandscape,
-                onSpeedClick = onSpeedClick,
-                onSpeedButtonPositioned = onSpeedButtonPositioned,
-                onOrientation = onOrientation,
-                modifier = Modifier.align(Alignment.End)
-            )
-        }
-    }
-}
-
-@Composable
-private fun PlaybackSpeedInlineMenu(
-    speeds: List<Float>,
-    selectedSpeed: Float,
-    onSpeedSelected: (Float) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .width(92.dp)
-            .clip(AppRadius.LG)
-            .background(Color.Black.copy(alpha = 0.62f))
-            .padding(vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
-    ) {
-        speeds.asReversed().forEach { option ->
-            val selected = abs(option - selectedSpeed) < 0.001f
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(36.dp)
-                    .padding(horizontal = 6.dp)
-                    .clip(AppRadius.MD)
-                    .background(Color.White.copy(alpha = if (selected) 0.18f else 0f))
-                    .clickable { onSpeedSelected(option) }
-                    .padding(horizontal = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = option.formatSpeed() + "x",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = if (selected) "\u2713" else "",
-                    color = Color.White.copy(alpha = 0.82f),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PlayerToolRow(
-    speed: Float,
-    isLandscape: Boolean,
-    onSpeedClick: () -> Unit,
-    onSpeedButtonPositioned: (LayoutCoordinates) -> Unit,
-    onOrientation: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        GlassToolButton(
-            icon = Icons.Rounded.Speed,
-            label = "${speed.formatSpeed()}x",
-            onClick = onSpeedClick,
-            modifier = Modifier.onGloballyPositioned(onSpeedButtonPositioned)
-        )
-        GlassToolButton(
-            icon = if (isLandscape) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
-            label = if (isLandscape) "\u7AD6\u5C4F" else "\u6A2A\u5C4F",
-            onClick = onOrientation
-        )
-    }
-}
-
-@Composable
-private fun RoundIconButton(
-    icon: ImageVector,
-    contentDescription: String,
-    size: Int,
-    iconSize: Int = 34,
-    onClick: () -> Unit
-) {
-    IconButton(
-        modifier = Modifier
-            .size(size.dp)
-            .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.48f)),
-        onClick = onClick
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = Color.White,
-            modifier = Modifier.size(iconSize.dp)
-        )
-    }
 }
 
 @Composable
@@ -2353,45 +1794,12 @@ private fun PlayerLockButton(
     }
 }
 
-@Composable
-private fun GlassToolButton(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .clip(AppRadius.LG)
-            .background(Color.Black.copy(alpha = 0.42f))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 13.dp, vertical = 9.dp),
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(imageVector = icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(18.dp))
-        Text(text = label, color = Color.White, style = MaterialTheme.typography.labelMedium)
-    }
-}
-
-@Composable
-private fun TimeText(text: String) {
-    Text(
-        text = text,
-        color = Color.White.copy(alpha = 0.86f),
-        style = MaterialTheme.typography.labelMedium,
-        fontWeight = FontWeight.Medium
-    )
-}
-
 private fun aspectLabel(index: Int): String = when (index) {
     1 -> "Fill"
     2 -> "Zoom"
     else -> "Fit"
 }
 
-private fun Float.formatSpeed(): String =
-    if (this % 1f == 0f) toInt().toString() else toString()
 
 private fun formatTime(ms: Long): String {
     val totalSeconds = (ms / 1000).coerceAtLeast(0)
@@ -2420,82 +1828,6 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 // ─────────────────────────────────────────────────────────────────────────────
 // 双内核切换 UI
 // ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * 内核切换 pill（顶栏内，两段式）。
- *
- * 替代先前那个飘在 TopEnd 的宽 chip（文案是「内核 MPV（万能解码）→ ExoPlayer（默认）」）：
- * 它既太大，又和顶栏右侧的音轨 / 字幕 / 播放模式三个按钮抢同一块区域，
- * 实测会挡住字幕按钮。现在每段只写内核缩写，当前档反白高亮，
- * 点击另一段即切换，宽度约 96dp，位置固定在顶栏右组左缘。
- *
- * 只读 [current]，写只有 [onSwitch] 一个入口 —— 与旧实现保持同一条数据流，
- * 避免「当前内核」在 exo 的 Player.Listener 与 mpv 的快照轮询之间被写两次。
- */
-@Composable
-private fun EngineSwitchPill(
-    current: PlaybackEngineKind,
-    switching: Boolean,
-    onSwitch: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .height(30.dp)
-            .clip(RoundedCornerShape(15.dp))
-            .background(Color.White.copy(alpha = 0.14f))
-            .padding(3.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        EngineSwitchSegment(
-            label = "MPV",
-            active = current == PlaybackEngineKind.MPV,
-            enabled = !switching,
-            onClick = { if (current != PlaybackEngineKind.MPV) onSwitch() }
-        )
-        EngineSwitchSegment(
-            label = "EXO",
-            active = current == PlaybackEngineKind.EXO,
-            enabled = !switching,
-            onClick = { if (current != PlaybackEngineKind.EXO) onSwitch() }
-        )
-        if (switching) {
-            CircularProgressIndicator(
-                modifier = Modifier
-                    .padding(horizontal = 4.dp)
-                    .size(11.dp),
-                strokeWidth = 1.4.dp,
-                color = Color.White
-            )
-        }
-    }
-}
-
-/** [EngineSwitchPill] 的一段：当前档反白，另一档透明。 */
-@Composable
-private fun EngineSwitchSegment(
-    label: String,
-    active: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .height(24.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (active) Color.White.copy(alpha = 0.92f) else Color.Transparent)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 9.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            color = if (active) Color(0xFF1A1C20) else Color.White.copy(alpha = 0.78f),
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold
-        )
-    }
-}
 
 /**
  * 切换/降级提示条。
@@ -2527,4 +1859,57 @@ private fun EngineNoticeBanner(
             )
         }
     }
+}
+
+/** 顶栏状态芯片：内核 / HDR / 调色 / A-B / 睡眠定时 / 缩放。 */
+private fun buildStatusChips(state: PlayerUiState): List<String> = buildList {
+    add(if (state.engineKind == PlaybackEngineKind.MPV) "MPV · ${state.mpvHwdecMode.label}" else "ExoPlayer")
+    if (state.videoFps > 1f) add(String.format(java.util.Locale.US, "%.3g fps", state.videoFps))
+    val lut = state.lutSettings
+    if (lut.shouldApply) {
+        val look = com.example.localmovielibrarz.playback.lut.LutLook.entries
+            .firstOrNull { it.params == lut.params && it.creative == lut.creative }
+        add("调色 · ${look?.label ?: "自定义"}")
+    }
+    if (state.playerFeatures.hdrMode != com.example.localmovielibrarz.playback.engine.HdrToneMode.OFF &&
+        state.engineKind == PlaybackEngineKind.MPV
+    ) add("HDR · ${state.playerFeatures.hdrMode.label}")
+    if (state.abLoopA != null && state.abLoopB != null) add("A-B 循环")
+    if (state.sleepTimerEndsAt != null) add("睡眠定时")
+    if (state.zoomScale > 1.01f) add(String.format(java.util.Locale.US, "缩放 %.1fx", state.zoomScale))
+}
+
+private fun hdrStatusLabel(state: PlayerUiState): String {
+    val mode = state.playerFeatures.hdrMode
+    return when {
+        state.engineKind != PlaybackEngineKind.MPV -> "ExoPlayer 由系统处理 HDR（调色在 HDR 片源上自动透传）"
+        mode == com.example.localmovielibrarz.playback.engine.HdrToneMode.OFF -> "关闭（mpv 内置色调映射）· 可在 设置 → 播放增强 中开启"
+        else -> "${mode.label} · ${mode.subtitle}"
+    }
+}
+
+/**
+ * 找一个刷新率是 [fps] 整数倍（误差 < 1%）且分辨率与当前模式相同的显示模式。
+ * 例如 23.976fps → 48Hz/120Hz，29.97 → 60/120，25 → 50/100。找不到返回 null（保持现状）。
+ */
+private fun pickDisplayModeFor(activity: Activity, fps: Float): Int? {
+    val display = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        activity.display
+    } else {
+        @Suppress("DEPRECATION")
+        activity.windowManager.defaultDisplay
+    } ?: return null
+    val current = display.mode
+    val candidates = display.supportedModes.filter {
+        it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight
+    }
+    return candidates
+        .mapNotNull { mode ->
+            val ratio = mode.refreshRate / fps
+            val multiple = kotlin.math.round(ratio)
+            if (multiple >= 1f && kotlin.math.abs(ratio - multiple) / multiple < 0.01f) mode to multiple else null
+        }
+        .minByOrNull { (mode, multiple) -> multiple * 1000f - mode.refreshRate }
+        ?.first
+        ?.modeId
 }

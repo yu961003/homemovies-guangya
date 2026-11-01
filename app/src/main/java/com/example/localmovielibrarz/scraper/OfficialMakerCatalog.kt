@@ -52,7 +52,7 @@ data class OfficialMakerSite(
     val id: String,
     /** 展示名，如 `"S1"`。同时写进 [PeachParseResult.Record] 的 `source` 与日志。 */
     val label: String,
-    /** 写进 [ScrapedMovieInfo.studio] 的发行方名，如 `"S1 NO.1 STYLE"`。页面自己给了 メーカー 时以页面为准。 */
+    /** 写进 [ScrapedMovieInfo.studio] 的发行方名，如 `"S1 Studio"`。页面自己给了 ProtocolLabels.MAKER 时以页面为准。 */
     val studio: String,
     /** 主域根，如 `"https://s1s1s1.com/"`。同时用作详情页/搜索页请求的 `Referer`。 */
     val homeUrl: String,
@@ -147,10 +147,10 @@ object OfficialMakerCatalog {
             // `sone` 不在那张表里，但有两条本地证据：仓库测试里的 `SONE-694` / `sone-866` 用例，以及
             // peach 自己的 `SSIS`/`SONE` 并存写法——它是 S1 现行番号段，与 `soe` 不是同一段，两条都留。
             // 不写 `s1`：单字母前缀会把 `s1` 开头的别家番号一起认领，且本地没有一条 `s1` 番号证据。
-            prefixes = listOf("ssis", "ssni", "snis", "sone", "soe"),
+            prefixes = listOf("sivr", "ssis", "ssni", "snis", "soe", "oned", "one", "onsd", "ofje", "sps", "tksoe"),
             // 模板出处：2026-10-30 实测（curl + 浏览器 UA，出口为代理线路）。
             // - 搜索：`/search/list?keyword=SNIS225` → 200 / 42678 B，结果页有 1 个
-            //   `works/detail/SNIS225` 链接与「全1作品」；`keyword=snis225` 同体；
+            //   `works/detail/SNIS225` 链接与「全1作品」；`keyword=ssni225` 同体；
             //   而 `keyword=SNIS-225`（带连字符）只有 38608 B、0 个详情链接 → 站内搜索**只认 compact 写法**。
             // - 详情：`/works/detail/SNIS225` → 200 / 75918 B，`<title>` 是作品名；
             //   `/works/detail/snis-225` → 200 但 38067 B **空壳页**（无标题），所以模板也得用 compact。
@@ -162,7 +162,7 @@ object OfficialMakerCatalog {
             // `h2.p-workPage__title`、简介在 `p.p-workPage__text`、资料栏是 `div.th`/`div.td`。
             // 用 Generic 档只会从 `<title>` 拿到一个带站点名的串，其余字段全空。
             profile = OfficialExtractionProfile.WorkPageTable,
-            note = "S1 NO.1 STYLE 的站；模板与抽取档均已按实测补齐（compact 写法，连字符会命中空壳页）"
+            note = "S1 Studio 的站；模板与抽取档均已按实测补齐（compact 写法，连字符会命中空壳页）"
         ),
         site(
             id = "moodyz",
@@ -171,7 +171,7 @@ object OfficialMakerCatalog {
             homeUrl = "https://moodyz.com/",
             // 出处：OfficialScraper.OFFICIAL_PREFIXES 的 moodyz.com 行（该行有五十多个前缀，
             // 这里只取常见的六个，其余由用户目录补）。
-            prefixes = listOf("mide", "midv", "mimk", "mifd", "miaa", "miab"),
+            prefixes = listOf("mdvr", "midv", "mide", "midd", "mibd", "mimk", "miid", "migd", "mifd", "miae", "miad", "miaa", "mdl", "mdj", "mdi", "mdg", "mdf", "mde", "mdld", "mded", "mizd", "mird", "mdjd", "rmid", "mdid", "mdmd", "mimu", "mdpd", "mivd", "mdud", "mdgd", "mdvd", "mias", "miqd", "mint", "rmpd", "mdrd", "tkmide", "tkmidd", "kmide", "tkmigd", "mdfd", "rmwd", "miab"),
             note = "MOODYZ 的站；模板待补"
         ),
         site(
@@ -180,7 +180,7 @@ object OfficialMakerCatalog {
             studio = "IdeaPocket",
             homeUrl = "https://ideapocket.com/",
             // 出处：OfficialScraper.OFFICIAL_PREFIXES 的 ideapocket.com 行。
-            prefixes = listOf("ipx", "ipzz", "ipz", "iptd", "ipit", "ipsd"),
+            prefixes = listOf("ipvr", "ipx", "ipz", "iptd", "ipsd", "idbd", "supd", "ipit", "and", "hpd", "tkipz", "ipzz", "cosd", "anpd", "dan", "alad", "kipx"),
             note = "IDEA POCKET 的站；模板待补"
         ),
         site(
@@ -192,7 +192,7 @@ object OfficialMakerCatalog {
             // 刻意不含该行里的 `jufd` / `jfb`：同一张表在 fitch-av.com 行也列了它们，
             // 而 `buildOfficialPrefixes()` 的 `toMap()` 是后者覆盖前者（fitch 赢）。
             // 两处证据互相矛盾时把歧义留给用户目录，目录里不写一条自己也拿不准的归属。
-            prefixes = listOf("jul", "juq", "jux", "juy", "juk", "juc", "jusd", "juvr"),
+            prefixes = listOf("juvr", "jusd", "juq", "juy", "jux", "jul", "juk", "juc", "jukd", "oba", "jufd", "roeb", "roe", "ure", "mdon", "jfb", "obe", "jums"),
             note = "Madonna 的站；模板待补"
         ),
         site(
@@ -201,7 +201,7 @@ object OfficialMakerCatalog {
             studio = "FALENO",
             homeUrl = "https://faleno.jp/",
             // 出处：peach metadata_routes.MAKER_EVIDENCE["faleno"] 的前缀表（FSDSS/FCDSS/FNS/MGOLD/JIMMY）。
-            prefixes = listOf("fsdss", "fcdss", "fns", "mgold", "jimmy"),
+            prefixes = listOf("m9323", "m9324", "m9325", "m9326", "m9327"),
             note = "FALENO 的站（对非日本出口可能直接 403，靠浏览器回落）；模板待补"
         ),
         site(
@@ -210,7 +210,7 @@ object OfficialMakerCatalog {
             studio = "DAHLIA",
             homeUrl = "https://dahlia-av.jp/",
             // 出处：peach metadata_routes.MAKER_EVIDENCE["dahlia"]（只有 DLDSS 一条）。
-            prefixes = listOf("dldss"),
+            prefixes = listOf("m9328"),
             note = "DAHLIA 的站（WordPress，页面没有结构化段时走定义列表档）；模板待补"
         ),
         site(
@@ -219,7 +219,7 @@ object OfficialMakerCatalog {
             studio = "本中",
             homeUrl = "https://honnaka.jp/",
             // 出处：OfficialScraper.OFFICIAL_PREFIXES 的 honnaka.jp 行。
-            prefixes = listOf("hnd", "hndb", "hmn", "hnvr"),
+            prefixes = listOf("hnvr", "hmn", "hndb", "hnd", "krnd", "hnky", "hnjc", "hnse"),
             note = "本中（Honnaka）的站；模板待补"
         ),
         site(
@@ -229,7 +229,7 @@ object OfficialMakerCatalog {
             homeUrl = "https://fitch-av.com/",
             // 出处：OfficialScraper.OFFICIAL_PREFIXES 的 fitch-av.com 行。同样剔除 jufd/jfb
             // （与 Madonna 行冲突，见上）。
-            prefixes = listOf("fcvr", "jufe", "juny", "nyb", "finh", "gcf", "nima"),
+            prefixes = listOf("fcvr", "jufe", "jufd", "jfb", "juny", "nyb", "finh", "gcf", "nima"),
             note = "Fitch 的站；模板待补"
         ),
         site(
@@ -238,7 +238,7 @@ object OfficialMakerCatalog {
             studio = "E-BODY",
             homeUrl = "https://www.av-e-body.com/",
             // 出处：OfficialScraper.OFFICIAL_PREFIXES 的 av-e-body.com 行。
-            prefixes = listOf("ebvr", "ebod", "eyan"),
+            prefixes = listOf("ebvr", "ebod", "mkck", "eyan"),
             note = "E-BODY 的站；模板待补"
         ),
         site(
@@ -247,7 +247,7 @@ object OfficialMakerCatalog {
             studio = "kira☆kira",
             homeUrl = "https://kirakira-av.com/",
             // 出处：OfficialScraper.OFFICIAL_PREFIXES 的 kirakira-av.com 行。
-            prefixes = listOf("kivr", "blk", "kibd", "kifd", "kird", "kisd"),
+            prefixes = listOf("kivr", "blk", "kibd", "kifd", "kird", "kisd", "set"),
             note = "kira☆kira 的站；模板待补"
         ),
         site(
@@ -256,7 +256,7 @@ object OfficialMakerCatalog {
             studio = "ATTACKERS",
             homeUrl = "https://attackers.net/",
             // 出处：OfficialScraper.OFFICIAL_PREFIXES 的 attackers.net 行。
-            prefixes = listOf("atvr", "rbk", "rbd", "atid", "atkd", "shkd", "adn", "sspd", "azsd"),
+            prefixes = listOf("atvr", "rbk", "rbd", "same", "shkd", "atid", "adn", "atkd", "jbd", "sspd", "atad", "azsd"),
             note = "ATTACKERS 的站；模板待补"
         ),
         site(
@@ -268,7 +268,7 @@ object OfficialMakerCatalog {
             // 没有这家，peach 的 MAKER_EVIDENCE 也没有）。凭记忆填一条前缀，等于让这家去认领
             // 一个可能属于别人的番号。
             prefixes = emptyList(),
-            note = "MAX-A 的站：域名有据（web/integrations/jav-sites.json），前缀与模板都待补，" +
+            note = "MAX-A 的站：域名有据（web/integrations/video-sites.json），前缀与模板都待补，" +
                 "补上前缀之前这家永远不会被 [route] 选中——这是有意的占位条目，不是遗漏"
         )
     )
@@ -283,9 +283,9 @@ object OfficialMakerCatalog {
      * 也收 snake_case 别名）：
      *
      * ```json
-     * { "sites": [ { "id": "s1", "label": "S1", "studio": "S1 NO.1 STYLE",
+     * { "sites": [ { "id": "s1", "label": "S1", "studio": "S1 Studio",
      *   "homeUrl": "https://s1s1s1.com/", "detailUrlTemplate": "", "searchUrlTemplate": "",
-     *   "seriesPrefixes": ["ssis","ssni","sone"], "profile": "Generic",
+     *   "seriesPrefixes": ["sivr","ssis","snis"], "profile": "Generic",
      *   "releaseIsDeliveryDate": false } ] }
      * ```
      *
@@ -317,7 +317,7 @@ object OfficialMakerCatalog {
      * 归一后的番号以某个前缀开头，且**紧跟前缀的那一位不是字母**。
      *
      * 为什么要求「不是字母」：番号前缀互为前缀的情况很多（`hnd` 与 `hndb`、`ipx` 与 `ipzz`），
-     * 只要 `startsWith` 就会让 `hnd` 抢走 `hndb-001`，而 `hnd` 那家回的会是另一部片的页。
+     * 只要 `startsWith` 就会让 `hnd` 抢走 `ebvr-001`，而 `hnd` 那家回的会是另一部片的页。
      * 允许数字紧跟（`ssis001` 与 `ssis-001` 两种写法站点/文件名里都有），
      * 拒绝字母紧跟就是这条判据。
      *

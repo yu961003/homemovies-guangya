@@ -5,7 +5,7 @@ package com.example.localmovielibrarz.scraper
  *
  * 为什么要单独解析：这一家是纯服务端渲染的 PHP 页面，没有内嵌 JSON，字段散在
  * `<h1>`、`<p>` 与 meta description 里，而且在三处用了不同写法（`2026年9月21日`、
- * `販売者: X / 公開日: Y / 再生時間: Z`、`<p>ラベル</p><p>値</p>`）。用一条通吃的正则
+ * `卖家: X / 发布日: Y / ProtocolLabels.RUNTIME_2: Z`、`<p>标签</p><p>值</p>`）。用一条通吃的正则
  * 抠不出来，只能按字段各给一条口径，把「取不到就降级」写清楚。
  *
  * 判定顺序为什么不能动（1 → 2 → 3 → 4）：
@@ -16,7 +16,7 @@ package com.example.localmovielibrarz.scraper
  * 2. **再判年齢確認跳转**。年齢確認页有自己的 h1（「年齢確認」），第 3 步会把它判成
  *    `NotFound`，但那不是「站上没有」，而是「没有点过那道门」。这两档的处置完全不同：
  *    `AuthRequired` 重试也不会成功，只能让用户去浏览器点一次。
- * 3. **再核 h1 里的番号**。站上不存在的商品仍然回 200：要么是「見つかりませんでした」，
+ * 3. **再核 h1 里的番号**。站上不存在的商品仍然回 200：要么是「未找到」，
  *    要么软 404 渲染最近一部作品（h1 是别的番号）。两种都必须 `NotFound`（换源），
  *    而不是 `ParseError`（改版冷却）。
  * 4. **最后才是字段**。h1 已经确认「这一页就是这部片」之后，任何一块 DOM 取不到都只
@@ -41,28 +41,28 @@ object Fc2PpvDbParser {
     /** 年齢確認跳转的 URL 片段。 */
     private const val AGE_VERIFY_PATH = "/age-verify"
 
-    private const val SOLD_LABEL = "販売日"
+    private const val SOLD_LABEL = ProtocolLabels.SOLD_DATE
 
-    private const val RUNTIME_LABEL = "再生時間"
+    private const val RUNTIME_LABEL = ProtocolLabels.RUNTIME_2
 
-    private const val ACTRESS_LABEL = "出演女優"
+    private const val ACTRESS_LABEL = ProtocolLabels.ACTORS_3
 
-    private const val TAG_LABEL = "タグ"
+    private const val TAG_LABEL = ProtocolLabels.TAG
 
     /** 取块时最多往前看这么多字符：块由「下一个字段标签」截断，窗口只是兜底。 */
     private const val BLOCK_WINDOW = 3_000
 
     /** 页面上可能紧跟在某个值块之后的字段标签，用来给 [blockAfter] 收口。 */
     private val SIBLING_LABELS = listOf(
-        "出演女優", "タグ", "販売日", "配信日", "再生時間", "収録時間",
-        "商品番号", "メーカー", "シリーズ", "ジャンル", "ファイル形式", "ファイルサイズ",
-        "サンプル", "レビュー", "おすすめ", "関連作品"
+        ProtocolLabels.ACTORS_3, ProtocolLabels.TAG, ProtocolLabels.SOLD_DATE, ProtocolLabels.DELIVERY_DATE_2, ProtocolLabels.RUNTIME_2, ProtocolLabels.RUNTIME,
+        ProtocolLabels.PRODUCT_CODE, ProtocolLabels.MAKER, ProtocolLabels.SERIES, ProtocolLabels.GENRE, ProtocolLabels.FILE_FORMAT, ProtocolLabels.FILE_SIZE,
+        ProtocolLabels.SAMPLE, ProtocolLabels.REVIEW, ProtocolLabels.RECOMMENDED, ProtocolLabels.RELATED
     )
 
     /**
      * 字段标签的「文本节点」正则，构建一次。
      *
-     * 锚定在 `>` 之后、`<` 之前：站上属性值里也会出现同样的词（`title="タグ"`），只按
+     * 锚定在 `>` 之后、`<` 之前：站上属性值里也会出现同样的词（`title=ProtocolLabels.TAG`），只按
      * 字面找会把块截在属性上。`[^<]{0,8}` 允许标签文字后面跟一点空白或冒号。
      */
     private val LABEL_NODES: Map<String, Regex> = SIBLING_LABELS
@@ -96,7 +96,7 @@ object Fc2PpvDbParser {
 
     private val CONTENT = attribute("content")
 
-    /** 紧跟在标签节点之后的第一个 `<p>`：`<p>ラベル</p><p>値</p>` 这种写法。 */
+    /** 紧跟在标签节点之后的第一个 `<p>`：`<p>标签</p><p>值</p>` 这种写法。 */
     private val PARAGRAPH = Regex(
         """<p\b[^>]*>(.*?)</p>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
@@ -104,8 +104,8 @@ object Fc2PpvDbParser {
 
     private val JP_DATE = Regex("""(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日""")
 
-    /** 链接文字开头的「販売者」前缀（有的页面把它写进链接本身）。 */
-    private val SELLER_PREFIX = Regex("""^販売者\s*[:：]?\s*""")
+    /** 链接文字开头的 ProtocolLabels.SELLER 前缀（有的页面把它写进链接本身）。 */
+    private val SELLER_PREFIX = Regex("""^""" + ProtocolLabels.SELLER + """\s*[:：]?\s*""")
 
     /**
      * 标签块里通常是导航/其它区块的链接，不参与标签收集。
@@ -204,7 +204,7 @@ object Fc2PpvDbParser {
      * h1 里有没有 `FC2-PPV-<裸数字>`。
      *
      * 负向前瞻 `(?!\d)` 不能省：`4137487` 是 `41374870` 的前缀，只做 contains 会把
-     * 另一个番号判成本番号，于是把别人的标题、时长、女优写到这个号头上。
+     * 另一个番号判成本番号，于是把别人的标题、时长、演员写到这个号头上。
      */
     private fun codeIn(text: String, wanted: String): Boolean =
         Regex("""FC2-PPV-${Regex.escape(wanted)}(?!\d)""", RegexOption.IGNORE_CASE)
@@ -214,7 +214,7 @@ object Fc2PpvDbParser {
      * 取某个标签节点之后、下一个字段标签之前的那一块。
      *
      * 口径（对应用户提到的 `_block_after`）：**标签节点的上两层容器才装着值**——标签节点
-     * 自己那一层只有「出演女優」四个字，值在它的兄弟节点里，也就是隔着标签自己的结束标签
+     * 自己那一层只有ProtocolLabels.ACTORS_3四个字，值在它的兄弟节点里，也就是隔着标签自己的结束标签
      * 再往上两层。所以取块时必须先跨过标签自己的结束标签，再往后取，直到遇到下一个字段
      * 标签（[SIBLING_LABELS]）或撞上 [BLOCK_WINDOW]；停在标签自身容器上会取到空块。
      *
@@ -228,7 +228,7 @@ object Fc2PpvDbParser {
         var end = minOf(html.length, start + BLOCK_WINDOW)
         for (other in SIBLING_LABELS) {
             if (other == label) continue
-            // 从 start 往后找：同一个词在前面的字段里出现过（比如标题里带「タグ」），
+            // 从 start 往后找：同一个词在前面的字段里出现过（比如标题里带「ProtocolLabels.TAG」），
             // 从 0 起找会把块截成空串。
             val next = labelNode(html, other, start) ?: continue
             if (next.first < end) end = next.first
@@ -240,7 +240,7 @@ object Fc2PpvDbParser {
     private fun labelNode(html: String, label: String, from: Int): IntRange? =
         LABEL_NODES[label]?.find(html, from)?.range
 
-    /** `出演女優` 块里的女优名：优先 `img.alt`，其次链接文字；同名去重保序。 */
+    /** ProtocolLabels.ACTORS_3 块里的演员名：优先 `img.alt`，其次链接文字；同名去重保序。 */
     private fun actressNames(html: String): List<String> {
         val block = blockAfter(html, ACTRESS_LABEL)
         if (block.isEmpty()) return emptyList()
@@ -251,7 +251,7 @@ object Fc2PpvDbParser {
             .distinct()
     }
 
-    /** `タグ` 块里的链接文字；导航类链接与页码不参与。 */
+    /** `ProtocolLabels.TAG` 块里的链接文字；导航类链接与页码不参与。 */
     private fun tagNames(html: String): List<String> {
         val block = blockAfter(html, TAG_LABEL)
         if (block.isEmpty()) return emptyList()
@@ -269,7 +269,7 @@ object Fc2PpvDbParser {
     }
 
     private fun sellerName(html: String, description: Map<String, String>): String {
-        val described = description["販売者"].orEmpty()
+        val described = description[ProtocolLabels.SELLER].orEmpty()
         if (described.isNotEmpty()) return described
         val anchor = sellerAnchor(html) ?: return ""
         return SELLER_PREFIX.replace(anchorName(anchor), "").trim()
@@ -292,7 +292,7 @@ object Fc2PpvDbParser {
     /**
      * 链接的显示名：`img.alt` 优先，其次链接文字。
      *
-     * 女优与卖家在这家站上都是「头像 + 名字」的写法，名字常常只写在 alt 里，链接正文是空的。
+     * 演员与卖家在这家站上都是「头像 + 名字」的写法，名字常常只写在 alt 里，链接正文是空的。
      */
     private fun anchorName(anchor: Anchor): String {
         val alt = IMG.find(anchor.inner)?.let { attributeValue(it.groupValues[1], ALT) }.orEmpty()
@@ -302,7 +302,7 @@ object Fc2PpvDbParser {
     }
 
     /**
-     * 取 meta description 里 `キー: 値 / キー: 値` 形式的那几项。
+     * 取 meta description 里 `键: 值 / 键: 值` 形式的那几项。
      *
      * 按 ` / ` 切段而不是用一条大正则：字段可能缺项、顺序也可能变（实测有的页面没有
      * `再生時間`），按段解析缺一项不影响其它项。代价是卖家名里若出现斜杠会被切断——
@@ -325,7 +325,7 @@ object Fc2PpvDbParser {
         return out
     }
 
-    /** `<p>ラベル</p>` 后面那一个 `<p>` 的正文。 */
+    /** `<p>标签</p>` 后面那一个 `<p>` 的正文。 */
     private fun valueAfterLabel(html: String, label: String): String {
         val marker = Regex(
             """<p\b[^>]*>\s*${Regex.escape(label)}\s*</p>""",

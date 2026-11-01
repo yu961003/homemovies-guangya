@@ -54,8 +54,8 @@ android {
         applicationId = "com.example.localmovielibrarz"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "3.2"
+        versionCode = 22
+        versionName = "3.3"
 
         // mpv 原生链路由 app/src/androidTest/.../MpvPlaybackSmokeTest.kt 做运行期验证
         // （打包层 / 加载层 / 解码层 / 渲染层四级）。测试 APK 只在 ./gradlew
@@ -137,6 +137,12 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    // MediaPipe 模型必须以「不压缩」方式进 APK：Tasks 通过 AssetManager 直接 mmap 模型，
+    // 压缩条目无法 mmap，createFromOptions 会抛 "Unable to open file"（见 playback/face/）。
+    androidResources {
+        noCompress += listOf("tflite", "task")
     }
 
     // 16 KB 页对齐的第 2 层：APK 里 .so 的存储方式。
@@ -237,6 +243,15 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     // 双核心 v5：移除 nextlib-media3ext（minCompileSdk 冲突 / 维护成本高），
     // Exo 软解短板改由 mpv 核心兜底（§5.4）。ExoPlayer 回归原生解码 + 解码器回退。
+
+    // 人脸/肤色分析（自动调色）：FaceLandmarker 网格 + FaceDetector 兜底，模型随包在 assets/mediapipe/。
+    //
+    // 版本选择：
+    //   - 0.10.26.1 的 arm64 原生库（libmediapipe_tasks_vision_jni.so）三个 PT_LOAD 段
+    //     p_align 均为 0x4000，满足本工程的 16 KB 页对齐硬约束（实测解包读段表）；
+    //   - 1.x 系列会额外拉入 litertlm（端侧大模型运行时），与本功能无关且显著增大体积，不采用。
+    //   - 原生库只按 abiFilters（mpvAbis）打包，因此与 libmpv 的 ABI 集合保持一致。
+    implementation("com.google.mediapipe:tasks-vision:0.10.26.1")
 
     implementation("androidx.room:room-ktx:2.8.4") // 升 2.8.4 以兼容 Kotlin 2.3 / KSP 2.3.x（2.6.1 的 KSP 处理器跟不上）
     ksp("androidx.room:room-compiler:2.8.4")

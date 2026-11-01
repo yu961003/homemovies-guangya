@@ -1,5 +1,9 @@
 package com.example.localmovielibrarz.ui.settings
 import com.example.localmovielibrarz.ui.AppRadius
+import com.example.localmovielibrarz.ui.components.HmGroup
+import com.example.localmovielibrarz.ui.components.HmListItem
+import com.example.localmovielibrarz.ui.components.HmSwitchItem
+import com.example.localmovielibrarz.ui.components.HmTopBar
 import com.example.localmovielibrarz.ui.warning
 import com.example.localmovielibrarz.ui.info
 
@@ -164,7 +168,11 @@ private enum class SettingsPage {
     PlayerSubtitleLibrary,
     StartupAnimation,
     Update,
-    UsageStats
+    UsageStats,
+    /** v2：外观（明暗 / 色板 / 动态取色 / AMOLED）。 */
+    Appearance,
+    /** v2：播放增强（mpvRx 能力清单接入）。 */
+    PlayerEnhance
 }
 
 @Composable
@@ -244,7 +252,8 @@ fun SettingsScreen(
             currentPage = if (currentPage == SettingsPage.PlayerSubtitle ||
                 currentPage == SettingsPage.PlayerProgressBar ||
                 currentPage == SettingsPage.PlayerColorGrade ||
-                currentPage == SettingsPage.PlayerSubtitleLibrary
+                currentPage == SettingsPage.PlayerSubtitleLibrary ||
+                currentPage == SettingsPage.PlayerEnhance
             ) SettingsPage.Player else null
         }
     }
@@ -327,7 +336,8 @@ fun SettingsScreen(
                         { currentPage = if (currentPage == SettingsPage.PlayerSubtitle ||
                         currentPage == SettingsPage.PlayerProgressBar ||
                         currentPage == SettingsPage.PlayerColorGrade ||
-                        currentPage == SettingsPage.PlayerSubtitleLibrary
+                        currentPage == SettingsPage.PlayerSubtitleLibrary ||
+                        currentPage == SettingsPage.PlayerEnhance
                     ) SettingsPage.Player else null }
                     }
                 }
@@ -460,7 +470,8 @@ fun SettingsScreen(
                         onOpenSubtitle = { currentPage = SettingsPage.PlayerSubtitle },
                         onOpenProgressBar = { currentPage = SettingsPage.PlayerProgressBar },
                         onOpenColorGrade = { currentPage = SettingsPage.PlayerColorGrade },
-                        onOpenLocalSubtitleLibrary = { currentPage = SettingsPage.PlayerSubtitleLibrary }
+                        onOpenLocalSubtitleLibrary = { currentPage = SettingsPage.PlayerSubtitleLibrary },
+                        onOpenEnhance = { currentPage = SettingsPage.PlayerEnhance }
                     )
 
                     SettingsPage.PlayerSubtitle -> ExternalSubtitleSettingsPage(
@@ -485,14 +496,24 @@ fun SettingsScreen(
                         onAlphaChange = viewModel::updatePlayerProgressBarAlphaPercent
                     )
 
-                    SettingsPage.PlayerColorGrade -> PlayerColorGradeSettingsPage(
+                    SettingsPage.PlayerColorGrade -> ColorGradeSettingsPage(
                         uiState = uiState,
                         onEnabledChange = viewModel::updateLutEnabled,
                         onParamChange = { key, value -> viewModel.updateLutParam(key, value) },
                         onStrengthChange = viewModel::updateLutStrength,
                         onLutSizeChange = viewModel::updateLutSize,
-                        onPresetSelect = viewModel::applyLutPreset
+                        onPresetSelect = viewModel::applyLutPreset,
+                        onLookSelect = viewModel::applyLutLook,
+                        onCreativeChange = { key, value -> viewModel.updateLutCreative(key, value) },
+                        onCreativeReset = viewModel::resetLutCreative,
+                        onOverlayChange = { path, name -> viewModel.setLutOverlay(path, name) },
+                        onOverlayMixChange = viewModel::updateLutOverlayMix,
+                        onMessage = viewModel::reportMessage
                     )
+
+                    SettingsPage.Appearance -> AppearanceSettingsPage()
+
+                    SettingsPage.PlayerEnhance -> PlayerEnhancementSettingsPage()
 
                     SettingsPage.StartupAnimation -> StartupAnimationSettingsPage(
                         uiState = uiState,
@@ -1005,6 +1026,8 @@ private fun SettingsPage.titleText(): String = when (this) {
     SettingsPage.StartupAnimation -> "开场动画"
     SettingsPage.Update -> "应用更新"
     SettingsPage.UsageStats -> "使用统计"
+    SettingsPage.Appearance -> "外观"
+    SettingsPage.PlayerEnhance -> "播放增强"
 }
 
 @Composable
@@ -1074,21 +1097,21 @@ private fun SettingsOverviewPage(
     SettingsGroupCard(title = "播放器") {
         SettingsEntryRow(
             title = "播放器设置",
-            subtitle = "外挂字幕 ${uiState.externalSubtitleFontSizeSp}sp · ${externalSubtitleFontLabel(uiState.externalSubtitleFontFamily)} · ${externalSubtitleColorLabel(uiState.externalSubtitleTextColor)} · 位置 ${uiState.externalSubtitleBottomPaddingPercent}%",
+            subtitle = "内核与解码 · 实时调色 · 外挂字幕 ${uiState.externalSubtitleFontSizeSp}sp · ${externalSubtitleFontLabel(uiState.externalSubtitleFontFamily)} · ${externalSubtitleColorLabel(uiState.externalSubtitleTextColor)} · 位置 ${uiState.externalSubtitleBottomPaddingPercent}%",
             onClick = { onOpenPage(SettingsPage.Player) }
+        )
+        SettingsEntryRow(
+            title = "播放增强",
+            subtitle = "HDR 色调映射 · 去色带 · 手势 · 刷新率匹配 · 统计浮层",
+            onClick = { onOpenPage(SettingsPage.PlayerEnhance) }
         )
     }
     SettingsGroupCard(title = "应用") {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("浅色主题", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Text("切换后界面背景与文字颜色会自动适配", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f), style = MaterialTheme.typography.bodySmall)
-            }
-            Switch(checked = uiState.lightThemeEnabled, onCheckedChange = onLightThemeChange)
-        }
+        SettingsEntryRow(
+            title = "外观",
+            subtitle = "明暗模式 · 主题色板 · 动态取色 · 纯黑背景（当前：${if (uiState.lightThemeEnabled) "浅色" else "深色"}）",
+            onClick = { onOpenPage(SettingsPage.Appearance) }
+        )
         SettingsEntryRow(
             title = "开场动画",
             subtitle = if (uiState.startupAnimationEnabled) "已开启 · ${if (uiState.startupAnimationImageUri.isBlank()) "默认画面" else "自定义图片"}" else "默认关闭",
@@ -1175,8 +1198,16 @@ private fun PlayerSettingsPage(
     onOpenSubtitle: () -> Unit,
     onOpenProgressBar: () -> Unit,
     onOpenColorGrade: () -> Unit,
-    onOpenLocalSubtitleLibrary: () -> Unit
+    onOpenLocalSubtitleLibrary: () -> Unit,
+    onOpenEnhance: () -> Unit
 ) {
+    SettingsGroupCard(title = "播放增强") {
+        SettingsEntryRow(
+            title = "画质、手势与显示",
+            subtitle = "HDR 色调映射 · 去色带 · Anime4K 守卫 · 双击/长按/缩放手势 · 刷新率匹配 · 音量增强 · 自定义 mpv 选项",
+            onClick = onOpenEnhance
+        )
+    }
     SettingsSectionTitle("播放内核")
     SettingsGroupCard(title = "双内核共存") {
         Row(
@@ -1381,194 +1412,10 @@ private fun PlayerSettingsPage(
  * 会让人以为坏了。
  */
 private fun LutSettings.entrySubtitle(onMpv: Boolean): String = when {
-    !enabled -> "关闭 · 仅 mpv 内核实时调色（LUT）"
-    !onMpv -> "已开启 · 但默认内核是 ExoPlayer，调色只在 MPV 内核生效"
-    shouldApply -> "已开启 · ${lutSize}³ LUT · 强度 $strengthPercent% · 点击调整"
+    !enabled -> "关闭 · 两个内核都支持实时调色（LUT）"
+    shouldApply -> "已开启 · ${lutSize}³ LUT · 强度 $strengthPercent% · ${if (onMpv) "默认 MPV" else "默认 ExoPlayer"} 内核 · 点击调整"
     else -> "已开启但参数为默认值 · 画面无变化"
 }
-
-/**
- * 实时调色设置页。
- *
- * 能力边界写在页面上而不是只在文档里：mpv 内核支持、exo 不支持。切换内核后本页的
- * 设置不会被清掉——它是全局偏好，mpv 下次接管时照旧生效。
- */
-@Composable
-private fun PlayerColorGradeSettingsPage(
-    uiState: SettingsUiState,
-    onEnabledChange: (Boolean) -> Unit,
-    onParamChange: (LutParamKey, Int) -> Unit,
-    onStrengthChange: (Int) -> Unit,
-    onLutSizeChange: (Int) -> Unit,
-    onPresetSelect: (LutPreset) -> Unit
-) {
-    val settings = uiState.lutSettings
-
-    SettingsSectionTitle("实时调色")
-
-    SettingsGroupCard(title = "总开关") {
-        SettingsSwitchRow(
-            title = "启用实时调色（LUT）",
-            subtitle = "在 mpv 内核上按下方参数即时生成 3D LUT 并挂到播放管线；exo 内核不支持，切过去会自动失效。",
-            checked = settings.enabled,
-            onCheckedChange = onEnabledChange
-        )
-        if (!settings.enabled) {
-            Text(
-                text = "当前关闭。开启后可选择预设或手动拖动 7 个参数，改动会立即作用到正在播放的画面。",
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
-            )
-        }
-    }
-
-    SettingsSectionTitle("预设")
-    SettingsGroupCard(title = "一键套用") {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = "以下四组数值与参考实现完全一致，套用时会同时打开总开关（选「关闭调色」则关闭）。",
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-                style = MaterialTheme.typography.bodySmall
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                LutPreset.orderedForUi.chunked(2).forEach { pair ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        pair.forEach { preset ->
-                            OutlinedButton(onClick = { onPresetSelect(preset) }) {
-                                Text(preset.label)
-                            }
-                        }
-                    }
-                }
-            }
-            val activePreset = LutPreset.orderedForUi.firstOrNull { it.params == settings.params }
-            Text(
-                text = when {
-                    activePreset != null -> activePreset.description
-                    settings.params.isNeutral() -> "所有参数为 0（画面无变化）"
-                    else -> "自定义参数 · 已偏离全部预设"
-                },
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-    }
-
-    SettingsSectionTitle("色彩参数")
-    SettingsGroupCard(title = "七项微调") {
-        Text(
-            text = "范围均为 -100 ~ 100，0 表示不介入。滑杆拖动即时生效，无需点保存。",
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 10.dp)
-        )
-        LutParamKey.entries.forEach { key ->
-            val value = settings.params.get(key)
-            SubtitleStyleSliderRow(
-                title = key.label,
-                value = value,
-                range = LutParams.MIN..LutParams.MAX,
-                valueText = if (value > 0) "+$value" else "$value",
-                onValueChange = { next -> onParamChange(key, next) }
-            )
-            Text(
-                text = key.hint,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 6.dp)
-            )
-        }
-    }
-
-    SettingsSectionTitle("强度与精度")
-    SettingsGroupCard(title = "混合与 LUT 尺寸") {
-        SubtitleStyleSliderRow(
-            title = "叠加强度",
-            value = settings.strengthPercent,
-            range = LutSettings.MIN_STRENGTH..LutSettings.MAX_STRENGTH,
-            valueText = "${settings.strengthPercent}%",
-            onValueChange = onStrengthChange
-        )
-        Text(
-            text = "0% 等同关闭；100% 为参数原样。默认 80% 是参考实现「搜到的最优值直接用会偏重」的经验值。",
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp)
-        )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                    text = "LUT 尺寸",
-                    color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "越大过渡越平滑，生成越慢。${CubeLut.MIN_SIZE}³ 在暗部有可见台阶。",
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            CubeLut.Sizes.forEach { size ->
-                OutlinedButton(
-                    onClick = { onLutSizeChange(size) },
-                    enabled = settings.lutSize != size
-                ) { Text("$size³") }
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-    }
-
-    SettingsSectionTitle("说明")
-    SettingsGroupCard(title = "能力边界") {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = "· 仅 mpv 内核生效（通过 libmpv 的 target-lut 属性实时重载，不改文件、不重编码）。",
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                text = "· exo 内核无对应能力，切到 exo 后调色不生效但设置保留。",
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                text = "· 自动分析调参已内置：mpv 内核播放时点播放页右侧「调色」段里的「自动分析调参」，会截取当前帧分析肤色与亮度，自动回填参数。",
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                text = "· 下发失败（设备不支持 / 路径不可读 / 内核未走 gpu-next）时播放页「调色」段会显示具体原因，不会静默失效。",
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-    }
-}
-
 
 @Composable
 private fun UsageStatsPage(repository: UsageStatsRepository) {
@@ -3829,7 +3676,7 @@ private fun MgstagePrefixPanel(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("MGS素人优先", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                Text("MGS业余优先", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 Text(
                     text = "开启后，命中 MGS 前缀规则的影片会优先尝试 MGStage；关闭则严格按刮削源优先级执行。",
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.52f),
@@ -4797,21 +4644,16 @@ private fun Dmm2SkippedPrefixPanel(
     }
 }
 
+/*
+ * v2：设置页公共组件改为委托到 ui/components 的 MD3 组件集（HmGroup / HmListItem / HmSwitchItem），
+ * 全应用的分组卡片、列表项、开关项保持同一套外观。签名不变，旧页面无需改动。
+ */
 @Composable
 private fun SettingsGroupCard(
     title: String,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SettingsSectionTitle(title)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f), AppRadius.LG)
-                .padding(vertical = 4.dp),
-            content = content
-        )
-    }
+    HmGroup(title = title, content = content)
 }
 
 @Composable
@@ -4820,27 +4662,7 @@ private fun SettingsEntryRow(
     subtitle: String,
     onClick: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 13.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Text(
-            text = title,
-            color = MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = subtitle,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
+    HmListItem(title = title, subtitle = subtitle, onClick = onClick)
 }
 
 @Composable
@@ -4850,32 +4672,7 @@ private fun SettingsSwitchRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(3.dp)
-        ) {
-            Text(
-                text = title,
-                color = MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = subtitle,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
+    HmSwitchItem(title = title, subtitle = subtitle, checked = checked, onCheckedChange = onCheckedChange)
 }
 
 @Composable
@@ -5209,29 +5006,11 @@ private fun ImageCachePanel(
 
 @Composable
 private fun SettingsTopBar(title: String = "设置", onBack: (() -> Unit)? = null) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Brush.verticalGradient(listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.background)))
-            .windowInsetsPadding(WindowInsets.statusBars)
-            .padding(start = 14.dp, end = 16.dp, top = 6.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (onBack != null) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回设置", tint = MaterialTheme.colorScheme.onSurface)
-            }
-        } else {
-            Icon(Icons.Rounded.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface)
-        }
-        Text(
-            text = title,
-            color = MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.ExtraBold,
-            modifier = Modifier.padding(start = 10.dp)
+    HmTopBar(
+        title = title,
+        onBack = onBack,
+        navigationIcon = if (onBack == null) Icons.Rounded.Settings else null
         )
-    }
 }
 
 @Composable
@@ -5264,8 +5043,8 @@ private fun SettingsSectionTitle(text: String) {
     Text(
         text = text,
         color = MaterialTheme.colorScheme.onSurface,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold
+        style = MaterialTheme.typography.titleLarge,
+        modifier = Modifier.padding(start = 4.dp, top = 8.dp)
     )
 }
 

@@ -11,7 +11,7 @@ package com.example.localmovielibrarz.scraper
  * 2. OpenGraph 与常见 `meta`（`og:title` / `og:description` / `og:image` /
  *    `article:published_time` / `product:release_date` / `product:brand`，外加 `itemprop` 微数据）；
  * 3. `dt`/`dd`（定义列表）与 `th`/`td`（表格）的标签文字配对——标签词表是日文站通用的那几个：
- *    発売日 / 配信開始日 / 収録時間 / メーカー / レーベル / 出演者 / ジャンル / シリーズ / 監督。
+ *    发行日 / ProtocolLabels.DELIVERY_DATE / ProtocolLabels.RUNTIME / ProtocolLabels.MAKER / ProtocolLabels.LABEL / ProtocolLabels.ACTORS / ProtocolLabels.GENRE / ProtocolLabels.SERIES / ProtocolLabels.DIRECTOR。
  *
  * ## 为什么是「三层降级 + 逐字段先到先得」，而不是「整层切换」
  *
@@ -46,8 +46,8 @@ object OfficialPageExtractor {
      * duration/actor[].name/director[].name/brand/aggregateRating.ratingValue）
      * ② OpenGraph + 常见 meta（og:title / og:description / og:image / article:published_time /
      * product:release_date）
-     * ③ `dt`/`dd`、`th`/`td` 的标签文字配对（标签词表：発売日／配信開始日／収録時間／メーカー／
-     * レーベル／出演者／ジャンル／シリーズ／監督）
+     * ③ `dt`/`dd`、`th`/`td` 的标签文字配对（标签词表：发行日／ProtocolLabels.DELIVERY_DATE／ProtocolLabels.RUNTIME／ProtocolLabels.MAKER／
+     * ProtocolLabels.LABEL／ProtocolLabels.ACTORS／ProtocolLabels.GENRE／ProtocolLabels.SERIES／ProtocolLabels.DIRECTOR）
      * 都抽不到 title → Failed(NoUsableMetadata, ...)
      *
      * @param html 页面正文（`null` 与空串同义）。
@@ -94,15 +94,15 @@ object OfficialPageExtractor {
             )
         }
 
-        // releaseIsDeliveryDate 的站：页面上的「発売日/配信開始日」是配信开始日，早于发行日，
+        // releaseIsDeliveryDate 的站：页面上的 ProtocolLabels.RELEASE_DATE / DELIVERY_DATE 实际是上架日，早于发行日，
         // 写进 premiered 会让账本把所有这类片判成早一个月发行（peach 对 prestige 的实测结论）。
-        // 值本身没有第二个可去的字段，按契约丢弃，不在 plot 里补一句「実質発売日」。
+        // 值本身没有第二个可去的字段，按契约丢弃，不在 plot 里补一句「实际发行日」。
         val premiered = if (site.releaseIsDeliveryDate) "" else toIsoDay(facts.release)
         val coverUrls = coverCandidates(text)
         val cover = coverUrls.firstOrNull().orEmpty()
         val runtime = Fc2Parser.runtimeMinutes(toClock(facts.runtime))
         val studio = facts.studio.ifBlank { site.studio }
-        // publisher 是「レーベル」，与 studio（メーカー）不是一个概念；页面没给就退回片商名，
+        // publisher 是「ProtocolLabels.LABEL」，与 studio（ProtocolLabels.MAKER）不是一个概念；页面没给就退回片商名，
         // 不留空——NFO 的 `<label>` 为空时播放器会显示成未知厂牌。
         val publisher = facts.publisher.ifBlank { site.studio }
         val genres = distinctClean(facts.genres)
@@ -124,7 +124,7 @@ object OfficialPageExtractor {
             directors = directors,
             actors = actors,
             genres = genres,
-            // 标签与类型在这批站上没有区别（站点只给「ジャンル」一栏），两列同源，
+            // 标签与类型在这批站上没有区别（站点只给「ProtocolLabels.GENRE」一栏），两列同源，
             // 与 [OfficialScraper] 的处理一致：下游按 tags 展示、按 genres 过滤，缺一列就会少一条。
             tags = genres,
             rating = facts.rating.trim(),
@@ -258,11 +258,11 @@ object OfficialPageExtractor {
             description = firstText(obj, "description", "abstract"),
             release = firstText(obj, "datePublished", "releaseDate", "uploadDate", "dateCreated"),
             runtime = firstText(obj, "duration", "timeRequired"),
-            // brand / manufacturer 是 schema.org 里「メーカー」的两位；productionCompany 在部分
+            // brand / manufacturer 是 schema.org 里「ProtocolLabels.MAKER」的两位；productionCompany 在部分
             // 站里放的是发行方，同一栏就够了。provider 不放：它多数时候是站点主体，不是厂牌。
             studio = firstName(obj, "brand", "manufacturer", "productionCompany"),
-            // 不把 JSON-LD 的 publisher 当 レーベル：这个键在片商站上填的是站点主体或发行方，
-            // 与「レーベル」不是一个概念，写进 publisher 会让 NFO 的 label 变成站点名。
+            // 不把 JSON-LD 的 publisher 当 ProtocolLabels.LABEL：这个键在片商站上填的是站点主体或发行方，
+            // 与「ProtocolLabels.LABEL」不是一个概念，写进 publisher 会让 NFO 的 label 变成站点名。
             publisher = "",
             series = seriesName,
             rating = rating,
@@ -350,30 +350,30 @@ object OfficialPageExtractor {
         if (pairs.isEmpty()) return Raw()
         return Raw(
             // 标题不从这里取：定义列表里没有标题栏，h1 与 og:title 已经覆盖。
-            release = pairValue(pairs, "発売日", "発売開始日", "リリース日", "発売"),
-            delivery = pairValue(pairs, "配信開始日", "配信日", "配信開始"),
-            runtime = pairValue(pairs, "収録時間", "再生時間", "収録"),
-            studio = pairValue(pairs, "メーカー", "メーカー名", "ブランド"),
-            publisher = pairValue(pairs, "レーベル", "レーベル名"),
-            series = pairValue(pairs, "シリーズ", "シリーズ名"),
-            directors = splitList(pairValue(pairs, "監督", "監督名")),
-            actors = splitList(pairValue(pairs, "出演者", "出演", "出演女優", "主演")),
-            genres = splitList(pairValue(pairs, "ジャンル", "カテゴリ", "カテゴリー", "タグ"))
+            release = pairValue(pairs, ProtocolLabels.RELEASE_DATE, ProtocolLabels.RELEASE_DATE_2, ProtocolLabels.RELEASE_DATE_3, ProtocolLabels.RELEASE_DATE_4),
+            delivery = pairValue(pairs, ProtocolLabels.DELIVERY_DATE, ProtocolLabels.DELIVERY_DATE_2, ProtocolLabels.DELIVERY_DATE_3),
+            runtime = pairValue(pairs, ProtocolLabels.RUNTIME, ProtocolLabels.RUNTIME_2, ProtocolLabels.RUNTIME_3),
+            studio = pairValue(pairs, ProtocolLabels.MAKER, ProtocolLabels.MAKER_2, ProtocolLabels.BRAND),
+            publisher = pairValue(pairs, ProtocolLabels.LABEL, ProtocolLabels.LABEL_2),
+            series = pairValue(pairs, ProtocolLabels.SERIES, ProtocolLabels.SERIES_2),
+            directors = splitList(pairValue(pairs, ProtocolLabels.DIRECTOR, ProtocolLabels.DIRECTOR_2)),
+            actors = splitList(pairValue(pairs, ProtocolLabels.ACTORS, ProtocolLabels.ACTORS_2, ProtocolLabels.ACTORS_3, ProtocolLabels.ACTORS_5)),
+            genres = splitList(pairValue(pairs, ProtocolLabels.GENRE, ProtocolLabels.CATEGORY, ProtocolLabels.CATEGORY_2, ProtocolLabels.TAG))
         )
     }
 
     // ── ③b `div.th` / `div.td` 资料栏（S1 系）──────────────────────────────
 
     /**
-     * S1 系作品页的资料栏：`<div class="th">発売日</div><div class="td">2014年9月7日</div>`。
+     * S1 系作品页的资料栏：`<div class="th">ProtocolLabels.RELEASE_DATE</div><div class="td">2014年9月7日</div>`。
      *
      * 三处与 [definitionRaw] 不同，所以单开一层而不是改那条正则：
      * 1. 值是**嵌套块**（`div.td` 里还有 `div.item`、多值 `<a>`），非贪婪的
      *    `<div class="th">(.*?)</div>\s*<div class="td">(.*?)</div>` 会在内层第一个 `</div>`
-     *    收尾，`ジャンル` 只留下第一项。
+     *    收尾，`ProtocolLabels.GENRE` 只留下第一项。
      * 2. 标题在 `h2.p-workPage__title`、剧情在 `p.p-workPage__text`，而这两个类名只出现在
      *    这一系站点上（`og:title` 为 0、`og:image` 是站点 logo）。
-     * 3. 多值字段（`ジャンル`）每一项是一个 `<a>`，按 `<a>` 收比按分隔符切准。
+     * 3. 多值字段（`ProtocolLabels.GENRE`）每一项是一个 `<a>`，按 `<a>` 收比按分隔符切准。
      *
      * 取值窗口用「下一个 `div.th` 的位置」封闭，因为跨块的 `</div>` 数量不可数；窗口仍设上限，
      * 防止最后一块被后续版面吞进去。
@@ -401,7 +401,7 @@ object OfficialPageExtractor {
             if (to <= from) continue
             blocks += label to text.substring(from, to)
         }
-        // 多值字段（ジャンル/女優）每项一个 `<a>`，按 `<a>` 收；日期、时长、品番没有 `<a>`，
+        // 多值字段（ProtocolLabels.GENRE/ProtocolLabels.ACTORS_4）每项一个 `<a>`，按 `<a>` 收；日期、时长、番号没有 `<a>`，
         // 退回整块纯文本。
         fun valuesOf(vararg labels: String): List<String> {
             for (want in labels) {
@@ -418,22 +418,22 @@ object OfficialPageExtractor {
         return Raw(
             titles = titles,
             description = description,
-            release = textOf("発売日", "発売開始日", "リリース日", "発売"),
-            delivery = textOf("配信開始日", "配信日", "配信開始"),
-            runtime = textOf("収録時間", "再生時間", "収録"),
-            studio = textOf("メーカー", "メーカー名", "ブランド", "製作商"),
-            publisher = textOf("レーベル", "レーベル名", "ブランド"),
-            series = textOf("シリーズ", "シリーズ名"),
-            directors = valuesOf("監督", "監督名"),
-            actors = valuesOf("女優", "出演者", "出演", "出演女優", "主演"),
-            genres = valuesOf("ジャンル", "カテゴリ", "カテゴリー", "タグ")
+            release = textOf(ProtocolLabels.RELEASE_DATE, ProtocolLabels.RELEASE_DATE_2, ProtocolLabels.RELEASE_DATE_3, ProtocolLabels.RELEASE_DATE_4),
+            delivery = textOf(ProtocolLabels.DELIVERY_DATE, ProtocolLabels.DELIVERY_DATE_2, ProtocolLabels.DELIVERY_DATE_3),
+            runtime = textOf(ProtocolLabels.RUNTIME, ProtocolLabels.RUNTIME_2, ProtocolLabels.RUNTIME_3),
+            studio = textOf(ProtocolLabels.MAKER, ProtocolLabels.MAKER_2, ProtocolLabels.BRAND, ProtocolLabels.MAKER_3),
+            publisher = textOf(ProtocolLabels.LABEL, ProtocolLabels.LABEL_2, ProtocolLabels.BRAND),
+            series = textOf(ProtocolLabels.SERIES, ProtocolLabels.SERIES_2),
+            directors = valuesOf(ProtocolLabels.DIRECTOR, ProtocolLabels.DIRECTOR_2),
+            actors = valuesOf(ProtocolLabels.ACTORS_4, ProtocolLabels.ACTORS, ProtocolLabels.ACTORS_2, ProtocolLabels.ACTORS_3, ProtocolLabels.ACTORS_5),
+            genres = valuesOf(ProtocolLabels.GENRE, ProtocolLabels.CATEGORY, ProtocolLabels.CATEGORY_2, ProtocolLabels.TAG)
         )
     }
 
     /**
      * 资料栏取值块：先按 [normalizeLabel] 精确配，再退「标签里含关键词」。
      *
-     * 顺序与 [pairValue] 一致，行为才对得上：S1 写 `発売日`、别的站写 `発売日 (販売日)`。
+     * 顺序与 [pairValue] 一致，行为才对得上：S1 写 `ProtocolLabels.RELEASE_DATE`、别的站写 `ProtocolLabels.RELEASE_DATE (ProtocolLabels.SOLD_DATE)`。
      */
     private fun blockOf(blocks: List<Pair<String, String>>, want: String): String? {
         blocks.firstOrNull { normalizeLabel(it.first) == normalizeLabel(want) }?.let { return it.second }
@@ -441,8 +441,8 @@ object OfficialPageExtractor {
     }
 
     /**
-     * 标签 → 值。先精确匹配，再「标签里含关键词」——站点会写 `発売日：`（带冒号）或
-     * `発売日 (販売日)`（带补充说明），全角冒号已在 [PeachHtml.text] 之外单独处理。
+     * 标签 → 值。先精确匹配，再「标签里含关键词」——站点会写 `ProtocolLabels.RELEASE_DATE：`（带冒号）或
+     * `ProtocolLabels.RELEASE_DATE (ProtocolLabels.SOLD_DATE)`（带补充说明），全角冒号已在 [PeachHtml.text] 之外单独处理。
      */
     private fun pairValue(pairs: List<Pair<String, String>>, vararg labels: String): String {
         for (label in labels) {
@@ -526,7 +526,7 @@ object OfficialPageExtractor {
      * 标题候选逐个剥番号，第一个剥完还非空的赢。
      *
      * 为什么要逐个而不是只剥第一个：`og:title` 经常就是「SSIS-001」，剥完全空；
-     * 而 h1 是「独占配信 タイトル」——第一个候选剥空了不代表这一页没有标题。
+     * 而 h1 是「独家发布 标题」——第一个候选剥空了不代表这一页没有标题。
      *
      * 全部剥空时退回第一个候选的**原样**（不剥）：只写番号的页面仍然有简介、演员、
      * 发行日，为一列标题丢掉整条记录不划算；那种页面的标题与番号同值，也不会误导用户。
@@ -550,7 +550,7 @@ object OfficialPageExtractor {
     }
 
     /**
-     * 剥掉标题开头的本页番号（`SSIS-001 タイトル` → `タイトル`）。
+     * 剥掉标题开头的本页番号（`SSIS-001 标题` → `标题`）。
      *
      * 允许的写法：大小写混排、番号段前后带括号、「字母段」与「数字段」之间可选连字符/下划线/
      * 点/空格、数字段允许前导零的任意个数（`SSIS-1` 与 `SSIS-001` 指同一部）。
@@ -603,7 +603,7 @@ object OfficialPageExtractor {
         val value = raw.trim()
         if (value.isEmpty()) return ""
         if (CLOCK.matches(value)) {
-            // 两段的 `2:10` 有歧义：`H:MM` 还是 `M:SS`。站方写収録時間时前者远多于后者，
+            // 两段的 `2:10` 有歧义：`H:MM` 还是 `M:SS`。站方写ProtocolLabels.RUNTIME时前者远多于后者，
             // 所以「第一段 ≤ 12」按小时算，否则按分钟算（`41:50` 是 41 分 50 秒）。
             val parts = value.split(':')
             if (parts.size == 2) {
@@ -942,7 +942,7 @@ object OfficialPageExtractor {
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
 
-    /** 资料栏的标签格：`<div class="th">発売日</div>`（允许 class 里还有别的词）。 */
+    /** 资料栏的标签格：`<div class="th">ProtocolLabels.RELEASE_DATE</div>`（允许 class 里还有别的词）。 */
     private val WORK_PAGE_TH = Regex(
         """<div\b[^>]*class\s*=\s*["'][^"']*\bth\b[^"']*["'][^>]*>(.*?)</div>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)

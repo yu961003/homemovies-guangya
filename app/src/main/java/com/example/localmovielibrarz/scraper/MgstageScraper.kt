@@ -80,15 +80,15 @@ class MgstageScraper(
             .orEmpty()
         val bigCoverUrl = imageSrc(coverUrl, thumb = false)
         val number = rows.firstValue("品番").ifBlank { movieIdFromUrl(url).ifBlank { requestedNumber } }
-        val release = rows.firstValue("配信開始日", "商品発売日").dateOrBlank()
-        val runtime = rows.firstValue("収録時間").digitsOnly()
-        val actors = rows.firstLinks("出演").ifEmpty {
-            rows.firstValue("出演").splitNames()
+        val release = rows.firstValue(ProtocolLabels.DELIVERY_DATE, ProtocolLabels.ON_SALE_DATE).dateOrBlank()
+        val runtime = rows.firstValue(ProtocolLabels.RUNTIME).digitsOnly()
+        val actors = rows.firstLinks(ProtocolLabels.ACTORS_2).ifEmpty {
+            rows.firstValue(ProtocolLabels.ACTORS_2).splitNames()
         }
-        val genres = rows.firstLinks("ジャンル")
-        val maker = rows.firstValue("メーカー")
-        val label = rows.firstValue("レーベル")
-        val series = rows.firstValue("シリーズ")
+        val genres = rows.firstLinks(ProtocolLabels.GENRE)
+        val maker = rows.firstValue(ProtocolLabels.MAKER)
+        val label = rows.firstValue(ProtocolLabels.LABEL)
+        val series = rows.firstValue(ProtocolLabels.SERIES)
         val score = rows.firstValue("評価").scoreOrBlank()
         val trailer = sampleMovieUrl(html)
 

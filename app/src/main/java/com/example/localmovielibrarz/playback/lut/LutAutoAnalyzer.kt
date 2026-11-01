@@ -32,7 +32,7 @@ class LutAutoAnalysis(
  * | 参考实现 | 本工程 | 依赖 |
  * |---|---|---|
  * | `capture_mpv_frame_via_ipc` + `cv2.imread` | 调用方负责（mpv 截图 + [LutSkinAnalyzer.analyze]） | Android Bitmap |
- * | `extract_skin` | [LutSkinAnalyzer] | 纯 Kotlin |
+ * | `extract_skin` | [LutSkinAnalyzer]（人脸区域由 MediaPipe 提供，见 [LutFaceRegion]） | 纯 Kotlin |
  * | `predict_params` | [LutParamPredictor] | 纯 Kotlin |
  *
  * 本类只做「串起来」和「出结论文案」，不碰 Android API，因此可以脱离设备在
@@ -59,9 +59,14 @@ object LutAutoAnalyzer {
         width: Int,
         height: Int,
         mode: LutAnalysisMode? = null,
-        trace: MutableList<String>? = null
+        trace: MutableList<String>? = null,
+        faces: List<LutFaceRegion> = emptyList()
     ): LutAutoAnalysis {
-        val features = LutSkinAnalyzer.analyze(frame, width, height)
+        val features = LutSkinAnalyzer.analyze(frame, width, height, faces)
+        trace?.add(
+            "[区域] 人脸=${faces.size}，采样区域=${features?.regionName ?: "无"}，" +
+                "参与人脸=${features?.faceCount ?: 0}"
+        )
         return analyzeFeatures(features, mode, trace)
     }
 
@@ -106,7 +111,12 @@ object LutAutoAnalyzer {
             return "这一帧没检测到足够肤色像素，换个能看清人脸的画面再试"
         }
         val modeLabel = prediction.mode.label
-        val head = "已按「${modeLabel}」模板搜参"
+        val region = when (features.regionName) {
+            LutFaceRegion.Source.MESH.regionName -> "人脸网格 ${features.faceCount} 张"
+            LutFaceRegion.Source.BOX.regionName -> "人脸检测框 ${features.faceCount} 张"
+            else -> "整帧肤色（未检测到人脸）"
+        }
+        val head = "已按「${modeLabel}」模板搜参 · 采样：$region"
         val p = prediction.params
         val changed = !p.isNeutral()
         val body = buildString {

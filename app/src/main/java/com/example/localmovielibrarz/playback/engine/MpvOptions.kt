@@ -35,7 +35,10 @@ object MpvOptions {
         caFilePath: String?,
         targetLutPath: String? = null,
         anime4kShaders: String? = null,
+        enhancements: MpvEnhancementOptions = MpvEnhancementOptions.DEFAULT,
     ): List<Pair<String, String>> = buildList {
+        val forcedHdrChain = HdrToysChain.forMode(enhancements.hdrMode)
+            ?.takeIf { !enhancements.hdrShaderDir.isNullOrBlank() }
         // ── 渲染 ───────────────────────────────────────────────────────────────
         // exo: PlayerView 默认 SurfaceView 输出。mpv 对应 vo=gpu-next + android context。
         //
@@ -46,7 +49,13 @@ object MpvOptions {
         // `target-lut` 字符串只出现一次、且紧邻 `../video/out/vo_gpu_next.c:2047`，
         // 与上游源码一致。gpu-next 与 gpu 共用 opengl context（context_android.c），
         // 所以 gpu-context=android 照样有效。
-        add("vo" to "gpu-next")
+        //
+        // v2「省电渲染」（参考 mpvRx 的电池建议）：vo=gpu 比 gpu-next 更省电，但没有 target-lut。
+        // 所以只在「本次不需要调色、也不走 HDR 管线」时才允许退回 gpu，其余一律 gpu-next。
+        val powerSave = enhancements.powerSaveRender &&
+            targetLutPath.isNullOrBlank() &&
+            enhancements.hdrMode == HdrToneMode.OFF
+        add("vo" to if (powerSave) "gpu" else "gpu-next")
         add("gpu-context" to "android")
         // 硬件解码：exo 侧是 DefaultRenderersFactory 硬解优先 + 解码器回退（EXTENSION_RENDERER_MODE_PREFER）。
         // mpv 对应 hwdec=mediacodec（copy 模式兼容性最好），软解作为内部回退。
@@ -179,8 +188,26 @@ object MpvOptions {
         // 与 target-lut 同理：`glsl-shaders` 必须在 mpv_initialize() 之前下发才会在
         // 第一次建 VO 时参与 shader 编译；init 之后再设等于重建管线，画面会闪一下。
         // 这里只在下发值非空时写入，链为空/未启用就完全不出现在选项表里。
-        if (!anime4kShaders.isNullOrBlank()) {
-            add("glsl-shaders" to anime4kShaders)
+        //
+        // v2：强制 HDR 模式（PQ/HLG/BT.2020）的 hdr-toys 链同样必须 init 前进入 glsl-shaders，
+        // 与 Anime4K 拼成一个列表（Anime4K 挂 MAIN、hdr-toys 挂 OUTPUT，互不干扰）。
+        // AUTO 模式要等 FILE_LOADED 知道片源是不是 HDR，由引擎在运行期追加。
+        val hdrPaths = forcedHdrChain?.let { MpvHdrShaders.paths(enhancements.hdrShaderDir!!, it) }.orEmpty()
+        val allShaders = listOfNotNull(anime4kShaders?.takeIf { it.isNotBlank() }) + hdrPaths
+        if (allShaders.isNotEmpty()) {
+            add("glsl-shaders" to allShaders.joinToString(":"))
+        }
+        when {
+            forcedHdrChain != null -> addAll(HdrPipelineProperties.forChain(forcedHdrChain))
+            enhancements.hdrMode == HdrToneMode.LINEAR -> addAll(HdrPipelineProperties.linear())
+        }
+
+        // v2：GPU 去色带（参考 mpvRx）。关闭时不写任何选项，保持 v1 选项表不变。
+        if (enhancements.deband.enabled) addAll(enhancements.deband.toOptions())
+
+        // v2：音量增强。volume-max 必须 init 前设置，运行期再把 volume 拉到 100 以上。
+        if (enhancements.volumeMaxPercent > 100) {
+            add("volume-max" to enhancements.volumeMaxPercent.coerceAtMost(300).toString())
         }
 
         // 截帧（自动分析调参的输入）。默认走 vo 的 FBO 路径，而 hwdec=mediacodec* 的
@@ -191,6 +218,10 @@ object MpvOptions {
 
         // 结束行为：不自动播放下一个（exo 侧也是单条 mediaItem）
         add("idle" to "yes")
+
+        // v2：用户自定义选项最后下发（同名选项后者生效）。受保护的键已在解析阶段被拦下，
+        // 见 [MpvUserOptions.PROTECTED_KEYS]。
+        addAll(enhancements.userOverrides)
     }
 
     /**

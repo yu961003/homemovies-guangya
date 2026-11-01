@@ -81,7 +81,7 @@ class JavbusScraper(
             year = Regex("""\d{4}""").find(release)?.value.orEmpty(),
             premiered = release,
             runtime = runtime,
-            studio = fields.firstValue("製作商", "制作商"),
+            studio = fields.firstValue(ProtocolLabels.MAKER_3, "制作商"),
             publisher = fields.firstValue("發行商", "发行商"),
             series = fields.firstValue("系列"),
             directors = fields.firstValue("導演", "导演").splitNames(),
