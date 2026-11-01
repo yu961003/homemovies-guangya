@@ -77,7 +77,9 @@ class Cloud115QrLoginClient(
     private val settingsRepository: AppSettingsRepository,
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        // 主状态端点 /get/status/ 是长轮询：未扫码时会挂起约 30s 才返回（实测 2026-11 为 30.2s），
+        // 读超时必须大于该时长，否则每轮都会超时降级到短轮询端点。
+        .readTimeout(45, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
         .connectionPool(HttpClients.sharedConnectionPool)
         .dispatcher(HttpClients.sharedDispatcher)
@@ -208,30 +210,28 @@ class Cloud115QrLoginClient(
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("115 二维码状态获取失败：HTTP ${response.code}")
             val raw = response.body?.string().orEmpty()
-            val json = JSONObject(raw)
-            val data = json.optJSONObject("data") ?: json
-            val numericStatus = data.optInt("status", Int.MIN_VALUE)
-            val statusText = data.optString("status").lowercase()
-            if (numericStatus == Int.MIN_VALUE && statusText.isBlank()) {
-                error("115 二维码状态响应缺少 status")
-            }
-            return when (numericStatus) {
-                0 -> Cloud115QrLoginStatus.Waiting
-                1 -> Cloud115QrLoginStatus.Scanned
-                2 -> Cloud115QrLoginStatus.Confirmed
-                -1 -> Cloud115QrLoginStatus.Expired
-                -2 -> Cloud115QrLoginStatus.Canceled
-                else -> {
-                    when {
-                        statusText.contains("scan") -> Cloud115QrLoginStatus.Scanned
-                        statusText.contains("login") || statusText.contains("confirm") -> Cloud115QrLoginStatus.Confirmed
-                        statusText.contains("expire") -> Cloud115QrLoginStatus.Expired
-                        statusText.contains("cancel") -> Cloud115QrLoginStatus.Canceled
-                        else -> Cloud115QrLoginStatus.Waiting
-                    }
-                }
-            }
+            return parseStatusPayload(raw)
         }
+    }
+
+    private fun parseStatusPayload(raw: String): Cloud115QrLoginStatus {
+        val json = JSONObject(raw)
+        val data = json.optJSONObject("data")
+        val dataStatus = data?.optString("status").orEmpty()
+        val dataCode = data?.optInt("code", 0) ?: 0
+        val topCode = json.optInt("code", 0)
+        val code = if (dataCode != 0) dataCode else topCode
+        val stateRaw = json.opt("state")
+        val stateOk = stateRaw == true || stateRaw == 1 || stateRaw?.toString() == "1"
+        return resolveQrLoginStatus(
+            stateOk = stateOk,
+            code = code,
+            statusText = dataStatus.ifBlank { json.optString("status") }
+        ) ?: error(
+            "115 二维码状态响应无法识别" +
+                (if (code != 0) "：code=$code" else "") +
+                json.optString("message").takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
+        )
     }
 
     private fun normalizeCookies(cookieObject: JSONObject): String {
@@ -312,6 +312,53 @@ class Cloud115QrLoginClient(
         const val COOKIE_FILE_PREFIX = "115cookie_"
         const val COOKIE_FILE_SUFFIX = ".txt"
         const val LEGACY_ASSET_COOKIE_FILE = "115-cookies.txt"
+    }
+}
+
+private const val CODE_QR_WAITING = 90038
+private const val CODE_QR_EXPIRED = 90033
+/**
+ * 把 115 二维码状态接口的响应字段映射成登录状态；无法识别时返回 null。
+ *
+ * 两个端点的响应结构并不一致（2026-11 实测）：
+ * - 长轮询 `/get/status/`：未扫码时挂起约 30s 后才返回 `{"state":1,"code":0,"data":{}}`，
+ *   扫码/确认后 `data.status` 才会出现 0/1/2/-1/-2。
+ * - 短轮询 `/api/1.0/web/1.0/status/`：未扫码立即返回 `{"state":false,"code":90038,"message":"请扫描二维码"}`，
+ *   没有 `data` 字段；二维码过期返回 code=90033。
+ * 因此不能像旧实现那样把「缺 status」当成错误，否则未扫码阶段必然失败。
+ */
+internal fun resolveQrLoginStatus(
+    stateOk: Boolean,
+    code: Int,
+    statusText: String
+): Cloud115QrLoginStatus? {
+    val numeric = statusText.trim().toIntOrNull()
+    if (numeric != null) {
+        return when (numeric) {
+            0 -> Cloud115QrLoginStatus.Waiting
+            1 -> Cloud115QrLoginStatus.Scanned
+            2 -> Cloud115QrLoginStatus.Confirmed
+            -1 -> Cloud115QrLoginStatus.Expired
+            -2 -> Cloud115QrLoginStatus.Canceled
+            else -> null
+        }
+    }
+    val text = statusText.lowercase()
+    if (text.isNotBlank()) {
+        return when {
+            text.contains("scan") -> Cloud115QrLoginStatus.Scanned
+            text.contains("login") || text.contains("confirm") -> Cloud115QrLoginStatus.Confirmed
+            text.contains("expire") -> Cloud115QrLoginStatus.Expired
+            text.contains("cancel") -> Cloud115QrLoginStatus.Canceled
+            else -> null
+        }
+    }
+    // 没有 status 字段时按状态码兜底：90038 是「请扫描二维码」，即仍在等待扫码。
+    return when {
+        code == CODE_QR_WAITING -> Cloud115QrLoginStatus.Waiting
+        code == CODE_QR_EXPIRED -> Cloud115QrLoginStatus.Expired
+        stateOk && code == 0 -> Cloud115QrLoginStatus.Waiting
+        else -> null
     }
 }
 
