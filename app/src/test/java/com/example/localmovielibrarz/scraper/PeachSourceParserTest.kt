@@ -93,7 +93,7 @@ class PeachSourceParserTest {
 
     // ---------------------------------------------------------------- 一本道
 
-    private fun 1pondoJson(movieId: String) = """
+    private fun onepondoJson(movieId: String) = """
         {
           "MovieID": "$movieId",
           "Title": "一本道作品",
@@ -109,7 +109,7 @@ class PeachSourceParserTest {
 
     @Test
     fun onepondoParsesDetailJson() {
-        val result = OnePondoParser.parse(1pondoJson("010224_001"), "010224-001")
+        val result = OnePondoParser.parse(onepondoJson("010224_001"), "010224-001")
         assertTrue(result is PeachParseResult.Record)
         val info = (result as PeachParseResult.Record).info
         assertEquals("010224_001", info.number)
@@ -124,13 +124,13 @@ class PeachSourceParserTest {
     @Test
     fun onepondoRejectsJsonFromAnotherRelease() {
         // 同一天发行的另一部片：MovieID 对不上就必须拒收，而不是把标题写进来。
-        val result = OnePondoParser.parse(1pondoJson("010224_002"), "010224-001")
+        val result = OnePondoParser.parse(onepondoJson("010224_002"), "010224-001")
         assertEquals(PeachFailureReason.NotFound, (result as PeachParseResult.Failed).reason)
     }
 
     @Test
     fun onepondoReportsNotFoundForNonDatedCode() {
-        val result = OnePondoParser.parse(1pondoJson("010224_001"), "SSIS-115")
+        val result = OnePondoParser.parse(onepondoJson("010224_001"), "SSIS-115")
         assertEquals(PeachFailureReason.NotFound, (result as PeachParseResult.Failed).reason)
     }
 
